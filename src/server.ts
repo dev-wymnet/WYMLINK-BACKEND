@@ -1,0 +1,175 @@
+import express, { type Express, Router } from "express";
+import cors from "cors";
+import helmet from "helmet";
+import { pinoHttp } from "pino-http";
+import compression from "compression";
+import rateLimit from "express-rate-limit";
+import { randomUUID } from "crypto";
+
+import { config } from "./core/config/index.js";
+import { logger } from "./core/logger/logger.js";
+import { notFoundHandler } from "./core/middleware/notFoundHandler.js";
+import { errorHandler } from "./core/middleware/errorHandler.js";
+import { clientIp } from "./core/middleware/clientIp.js";
+import { getReadiness } from "./core/health/readiness.js";
+import swaggerUi from "swagger-ui-express";
+import { getOpenAPIDocument } from "./core/docs/openapi.js";
+
+import { authRoutes } from "./modules/auth/routes/auth.routes.js";
+import { pinRoutes } from "./modules/auth/routes/pin.routes.js";
+import { userRoutes } from "./modules/user/routes/user.routes.js";
+import { walletRoutes } from "./modules/wallet/routes/wallet.routes.js";
+import { webhookRoutes } from "./modules/monnify/routes/webhook.routes.js";
+import { telecomRoutes } from "./modules/telecom/routes/telecom.routes.js";
+import { billsRoutes } from "./modules/bills/routes/bills.routes.js";
+import { dashboardRoutes } from "./modules/dashboard/routes/dashboard.routes.js";
+import { geolocationRoutes } from "./modules/geolocation/routes/geolocation.routes.js";
+import { systemRoutes } from "./modules/system/routes/system.routes.js";
+import { trainingRoutes } from "./modules/training/routes/training.routes.js";
+import { payoutRoutes } from "./modules/payout/routes/payout.routes.js";
+import { adminAuthRoutes } from "./modules/admin/auth/routes/adminAuth.routes.js";
+import { adminManagementRoutes } from "./modules/admin/management/routes/admin.routes.js";
+import { adminPayoutRoutes } from "./modules/admin/payouts/routes/adminPayouts.routes.js";
+import { adminPaymentsRoutes } from "./modules/admin/payments/routes/payments.routes.js";
+import { adminBillsRoutes } from "./modules/admin/bills/routes/bills.routes.js";
+import { adminDashboardRoutes } from "./modules/admin/dashboard/routes/dashboard.routes.js";
+import { adminCustomersRoutes } from "./modules/admin/customers/routes/customers.routes.js";
+
+export function createServer(): Express {
+  const app = express();
+
+  // Real client IPs (see core/middleware/clientIp.ts); must run before rate limiting.
+  app.set("trust proxy", config.TRUST_PROXY_HOPS);
+  app.use(clientIp);
+
+  app.use(helmet());
+  app.use(compression());
+  app.use(
+    cors({
+      origin: (config.CORS_ORIGINS === true
+        ? true
+        : config.CORS_ORIGINS) as any,
+      credentials: true,
+    }),
+  );
+
+  const rateLimiter = rateLimit({
+    windowMs: config.RATE_LIMIT_WINDOW_MS,
+    max: config.RATE_LIMIT_MAX,
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+  app.use(rateLimiter);
+
+  app.use(
+    express.json({
+      limit: config.REQUEST_JSON_LIMIT,
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
+
+  app.use(
+    pinoHttp({
+      logger,
+      genReqId: (req) =>
+        (req.headers["x-request-id"] as string | undefined) || randomUUID(),
+      customProps: (req, res) => {
+        const xfwd =
+          (req.headers["x-forwarded-for"] as string | undefined) || "";
+        const ip = xfwd.split(",")[0]?.trim() || (req as any).ip;
+        return {
+          service: config.SERVICE_NAME,
+          env: config.NODE_ENV,
+          requestId: (req as any).id,
+          userId: (req as any).user?.id,
+          path: req.url,
+          method: req.method,
+          statusCode: res.statusCode,
+          responseTime: (res as any).responseTime,
+          ip,
+          userAgent: req.headers["user-agent"],
+        };
+      },
+      redact: {
+        paths: ["req.headers.authorization"],
+        remove: true,
+      },
+    }),
+  );
+
+  const api = express.Router();
+  api.get("/health", (_req, res) => {
+    res
+      .status(200)
+      .json({ ok: true, uptimeSeconds: Math.floor(process.uptime()) });
+  });
+
+  api.get("/ready", async (_req, res) => {
+    const readiness = await getReadiness();
+    const status =
+      readiness.status === "ok"
+        ? 200
+        : readiness.status === "degraded"
+          ? 200
+          : 503;
+    res.status(status).json(readiness);
+  });
+
+  // OpenAPI documentation endpoints
+  const openapi = getOpenAPIDocument();
+  api.get("/openapi.json", (_req, res) => {
+    res.status(200).json(openapi);
+  });
+  api.use(
+    "/api-docs",
+    helmet({
+      // Swagger UI renders via an inline <script> block, which the strict
+      // default CSP (script-src 'self') blocks. Relax it for docs only.
+      contentSecurityPolicy: {
+        directives: {
+          "script-src": ["'self'", "'unsafe-inline'"],
+          "upgrade-insecure-requests": null,
+        },
+      },
+    }),
+    swaggerUi.serve,
+    swaggerUi.setup(openapi),
+  );
+
+  api.use("/auth", authRoutes);
+  api.use("/auth/pin", pinRoutes);
+  api.use("/user", userRoutes);
+  api.use("/wallets", walletRoutes);
+  api.use("/webhooks", webhookRoutes);
+  api.use("/telecom", telecomRoutes);
+  api.use("/bills", billsRoutes);
+  api.use("/dashboard", dashboardRoutes);
+  api.use("/regions", geolocationRoutes);
+  api.use("/system", systemRoutes);
+  api.use("/training", trainingRoutes);
+  api.use("/payouts", payoutRoutes);
+
+  const admin = Router();
+  admin.use("/auth", adminAuthRoutes);
+  admin.use("/admins", adminManagementRoutes);
+  admin.use("/payouts", adminPayoutRoutes);
+  admin.use("/payments", adminPaymentsRoutes);
+  admin.use("/bills", adminBillsRoutes);
+  admin.use("/dashboard", adminDashboardRoutes);
+  admin.use("/customers", adminCustomersRoutes);
+  api.use("/admin", admin);
+
+  app.use("/api/v1", api);
+
+  // Convenience redirect so /api-docs works without the version prefix
+  app.get(["/api-docs", "/docs"], (_req, res) => {
+    res.redirect("/api/v1/api-docs");
+  });
+
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+
+  return app;
+}
