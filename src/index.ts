@@ -21,12 +21,19 @@ async function bootstrap() {
     await migrateLatest();
   }
 
-  await seedCountries();
-  logger.info("countries_seeded");
+  await seedCountries()
+    .then(() => logger.info("countries_seeded"))
+    .catch((err) => logger.warn({ err }, "countries_seed_skipped"));
 
   const isApi = env.PROCESS_ROLE === "api" || env.PROCESS_ROLE === "all";
 
-  const isWorker = env.PROCESS_ROLE === "worker" || env.PROCESS_ROLE === "all";
+  const isWorker =
+    (env.PROCESS_ROLE === "worker" || env.PROCESS_ROLE === "all") &&
+    Boolean(env.REDIS_URL);
+
+  if (!env.REDIS_URL) {
+    logger.warn("REDIS_URL not set: background workers disabled");
+  }
 
   let server: Server | null = null;
   let retryTimer: NodeJS.Timeout | null = null;
