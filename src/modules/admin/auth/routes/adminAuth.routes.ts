@@ -1,5 +1,5 @@
 import { Router } from "express";
-import rateLimit from "express-rate-limit";
+import { limiter } from "../../../../core/middleware/rateLimits.js";
 
 import { authGuard } from "../../../../core/middleware/authGuard.js";
 import { requireAdmin } from "../../../../core/middleware/requireAdmin.js";
@@ -12,14 +12,7 @@ import {
 
 export const adminAuthRoutes = Router();
 
-const adminLoginLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  keyGenerator: (req) =>
-    `${(req as any).ip}:${req.body?.email || req.body?.phone || ""}`,
-});
+const adminLoginLimiter = limiter({ windowMs: 15 * 60 * 1000, max: 5, by: "ip+identity" });
 
 adminAuthRoutes.post("/login", adminLoginLimiter, adminLoginHandler);
 adminAuthRoutes.post("/refresh", adminRefreshHandler);

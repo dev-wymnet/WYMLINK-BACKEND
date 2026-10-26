@@ -1,0 +1,38 @@
+// Nigerian banks with their NIBSS (NIP) institution codes, used for BVN ↔
+// account checks. Check new entries against Moneta's bank list before adding.
+export const NG_BANKS: ReadonlyArray<{ code: string; name: string }> = [
+  { code: "000014", name: "Access Bank" },
+  { code: "000009", name: "Citibank Nigeria" },
+  { code: "000010", name: "Ecobank Nigeria" },
+  { code: "000007", name: "Fidelity Bank" },
+  { code: "000016", name: "First Bank of Nigeria" },
+  { code: "000003", name: "First City Monument Bank (FCMB)" },
+  { code: "000027", name: "Globus Bank" },
+  { code: "000013", name: "Guaranty Trust Bank (GTBank)" },
+  { code: "000020", name: "Heritage Bank" },
+  { code: "000006", name: "Jaiz Bank" },
+  { code: "000002", name: "Keystone Bank" },
+  { code: "090267", name: "Kuda Microfinance Bank" },
+  { code: "000029", name: "Lotus Bank" },
+  { code: "090405", name: "Moniepoint Microfinance Bank" },
+  { code: "100004", name: "OPay" },
+  { code: "100002", name: "Paga" },
+  { code: "100033", name: "PalmPay" },
+  { code: "000008", name: "Polaris Bank" },
+  { code: "000031", name: "PremiumTrust Bank" },
+  { code: "000023", name: "Providus Bank" },
+  { code: "000012", name: "Stanbic IBTC Bank" },
+  { code: "000021", name: "Standard Chartered Bank" },
+  { code: "000001", name: "Sterling Bank" },
+  { code: "000022", name: "SunTrust Bank" },
+  { code: "000026", name: "TAJ Bank" },
+  { code: "000025", name: "Titan Trust Bank" },
+  { code: "000018", name: "Union Bank of Nigeria" },
+  { code: "000004", name: "United Bank for Africa (UBA)" },
+  { code: "000011", name: "Unity Bank" },
+  { code: "090110", name: "VFD Microfinance Bank" },
+  { code: "000017", name: "Wema Bank" },
+  { code: "000015", name: "Zenith Bank" },
+];
+
+export const findBank = (code: string) => NG_BANKS.find((b) => b.code === code) ?? null;

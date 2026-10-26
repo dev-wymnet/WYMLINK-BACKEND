@@ -14,14 +14,13 @@ const envSchema = z.object({
 
   DATABASE_URL: z.string().min(1),
 
-  // Optional at boot: features that need a missing provider fail when used,
-  // not at startup. Without REDIS_URL the background workers are skipped.
-
-  REDIS_URL: z.string().default(""),
-
   PG_POOL_MAX: z.coerce.number().int().positive().default(10),
 
   JWT_ACCESS_SECRET: z.string().min(32),
+
+  // Keys the HMAC stored for BVN/NIN (one identity per account). Never change
+  // it once customers have verified: existing hashes would stop matching.
+  KYC_HASH_SECRET: z.string().min(32),
 
   JWT_ACCESS_TTL_SECONDS: z.coerce
     .number()
@@ -35,15 +34,20 @@ const envSchema = z.object({
     .positive()
     .default(60 * 60 * 24),
 
-  MONNIFY_BASE_URL: z.string().url().default("https://api.monnify.com"),
+  // Providers below are optional at boot: a feature whose provider is not
+  // configured answers "not available yet" when used.
 
-  MONNIFY_API_KEY: z.string().default(""),
-
-  MONNIFY_SECRET_KEY: z.string().default(""),
-
-  MONNIFY_CONTRACT_CODE: z.string().default(""),
-
-  MONNIFY_SOURCE_ACCOUNT_NUMBER: z.string().default(""),
+  // Moneta (api.moneta.ng: BVN; app.moneta.ng partner API: virtual accounts).
+  // Moneta only accepts calls from whitelisted IPs: MONETA_PROXY_URL routes
+  // them through a fixed-IP HTTP proxy (e.g. Fixie) when set.
+  MONETA_API_URL: z.string().url().default("https://api.moneta.ng"),
+  MONETA_PARTNER_URL: z.string().url().default("https://app.moneta.ng/api/v1"),
+  MONETA_BVN_CLIENT_ID: z.string().default(""),
+  MONETA_BVN_CLIENT_SECRET: z.string().default(""),
+  MONETA_BVN_SERVICE_KEY: z.string().default(""),
+  MONETA_PARTNER_CLIENT_ID: z.string().default(""),
+  MONETA_PARTNER_CLIENT_SECRET: z.string().default(""),
+  MONETA_PROXY_URL: z.string().default(""),
 
   PEYFLEX_BASE_URL: z.string().url().default("https://client.peyflex.com.ng"),
 

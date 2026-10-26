@@ -3,7 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { pinoHttp } from "pino-http";
 import compression from "compression";
-import rateLimit from "express-rate-limit";
+import { limiter } from "./core/middleware/rateLimits.js";
 import { randomUUID } from "crypto";
 
 import { config } from "./core/config/index.js";
@@ -19,17 +19,13 @@ import { authRoutes } from "./modules/auth/routes/auth.routes.js";
 import { pinRoutes } from "./modules/auth/routes/pin.routes.js";
 import { userRoutes } from "./modules/user/routes/user.routes.js";
 import { walletRoutes } from "./modules/wallet/routes/wallet.routes.js";
-import { webhookRoutes } from "./modules/monnify/routes/webhook.routes.js";
-import { telecomRoutes } from "./modules/telecom/routes/telecom.routes.js";
-import { billsRoutes } from "./modules/bills/routes/bills.routes.js";
+import { billsRoutes, ordersRoutes, telecomRoutes } from "./modules/vtu/vtu.routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes/dashboard.routes.js";
-import { geolocationRoutes } from "./modules/geolocation/routes/geolocation.routes.js";
 import { systemRoutes } from "./modules/system/routes/system.routes.js";
 import { trainingRoutes } from "./modules/training/routes/training.routes.js";
 import { payoutRoutes } from "./modules/payout/routes/payout.routes.js";
 import { adminAuthRoutes } from "./modules/admin/auth/routes/adminAuth.routes.js";
 import { adminManagementRoutes } from "./modules/admin/management/routes/admin.routes.js";
-import { adminPayoutRoutes } from "./modules/admin/payouts/routes/adminPayouts.routes.js";
 import { adminPaymentsRoutes } from "./modules/admin/payments/routes/payments.routes.js";
 import { adminBillsRoutes } from "./modules/admin/bills/routes/bills.routes.js";
 import { adminDashboardRoutes } from "./modules/admin/dashboard/routes/dashboard.routes.js";
@@ -53,12 +49,7 @@ export function createServer(): Express {
     }),
   );
 
-  const rateLimiter = rateLimit({
-    windowMs: config.RATE_LIMIT_WINDOW_MS,
-    max: config.RATE_LIMIT_MAX,
-    standardHeaders: true,
-    legacyHeaders: false,
-  });
+  const rateLimiter = limiter({ windowMs: config.RATE_LIMIT_WINDOW_MS, max: config.RATE_LIMIT_MAX });
   app.use(rateLimiter);
 
   app.use(
@@ -142,11 +133,10 @@ export function createServer(): Express {
   api.use("/auth/pin", pinRoutes);
   api.use("/user", userRoutes);
   api.use("/wallets", walletRoutes);
-  api.use("/webhooks", webhookRoutes);
   api.use("/telecom", telecomRoutes);
   api.use("/bills", billsRoutes);
+  api.use("/orders", ordersRoutes);
   api.use("/dashboard", dashboardRoutes);
-  api.use("/regions", geolocationRoutes);
   api.use("/system", systemRoutes);
   api.use("/training", trainingRoutes);
   api.use("/payouts", payoutRoutes);
@@ -154,7 +144,6 @@ export function createServer(): Express {
   const admin = Router();
   admin.use("/auth", adminAuthRoutes);
   admin.use("/admins", adminManagementRoutes);
-  admin.use("/payouts", adminPayoutRoutes);
   admin.use("/payments", adminPaymentsRoutes);
   admin.use("/bills", adminBillsRoutes);
   admin.use("/dashboard", adminDashboardRoutes);

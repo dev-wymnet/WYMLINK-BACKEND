@@ -1,9 +1,9 @@
 import type { RequestHandler } from "express";
+import { z } from "zod";
 
 import { UnauthorizedError } from "../../../core/errors/UnauthorizedError.js";
-import { ValidationError } from "../../../core/errors/ValidationError.js";
 import { getMe, updateMyProfile } from "../service/user.service.js";
-import { setUserTelecomReloadlyEnabled } from "../repository/user.repository.js";
+import { setUserReloadlyEnabled } from "../repository/user.repository.js";
 import {
   createAccountUpdateRequest,
   listMyAccountUpdateRequests,
@@ -16,145 +16,89 @@ import {
 export const meHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    const me = await getMe(req.user.id);
-    res.status(200).json({ user: me });
+    res.status(200).json({ user: await getMe(req.user.id) });
   } catch (err) {
     next(err);
   }
 };
 
-export const setReloadlyEnabledHandler: RequestHandler = async (
-  req,
-  res,
-  next,
-) => {
+export const setReloadlyEnabledHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    // Admin role is enforced by requireAdmin on the route.
-    const { userId, enabled } = req.body as {
-      userId?: string;
-      enabled?: boolean;
-    };
-    if (!userId || typeof enabled !== "boolean")
-      throw new ValidationError("userId and enabled(boolean) are required");
-    await setUserTelecomReloadlyEnabled(userId, enabled);
+    // Admin role and permission are enforced on the route.
+    const body = z.object({ userId: z.string().uuid(), enabled: z.boolean() }).parse(req.body ?? {});
+    await setUserReloadlyEnabled(body.userId, body.enabled);
     res.status(200).json({ ok: true });
   } catch (err) {
     next(err);
   }
 };
 
+const profileSchema = z.object({
+  firstName: z.string().trim().min(1).max(100).optional(),
+  lastName: z.string().trim().min(1).max(100).optional(),
+  email: z.string().trim().email().optional(),
+  phone: z.string().trim().min(7).max(20).optional(),
+});
+
 export const updateProfileHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    const {
-      firstName,
-      lastName,
-      email,
-      phone,
-      countryCode,
-      preferredCurrency,
-    } = (req.body as any) ?? {};
-    const user = await updateMyProfile(req.user.id, {
-      firstName,
-      lastName,
-      email,
-      phone,
-      countryCode,
-      preferredCurrency,
-    });
-    res.status(200).json({ user });
+    const body = profileSchema.parse(req.body ?? {});
+    res.status(200).json({ user: await updateMyProfile(req.user.id, body) });
   } catch (err) {
     next(err);
   }
 };
 
-const allowedProfileFields = new Set([
-  "firstName",
-  "lastName",
-  "email",
-  "phone",
-  "countryCode",
-  "preferredCurrency",
-]);
+const accountUpdateSchema = z.object({
+  requestedFields: profileSchema
+    .extend({ reason: z.string().trim().max(500).optional() })
+    .refine((v) => Boolean(v.firstName || v.lastName || v.email || v.phone), {
+      message: "Tell us what you want to change",
+    }),
+});
 
-export const createAccountUpdateRequestHandler: RequestHandler = async (
-  req,
-  res,
-  next,
-) => {
+export const createAccountUpdateRequestHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    const { requestedFields } = req.body as {
-      requestedFields?: Record<string, unknown>;
-    };
-    if (!requestedFields || typeof requestedFields !== "object") {
-      throw new ValidationError("requestedFields must be an object");
-    }
-    const sanitized: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(requestedFields)) {
-      if (allowedProfileFields.has(key)) sanitized[key] = value;
-    }
-    if (Object.keys(sanitized).length === 0) {
-      throw new ValidationError("No valid fields to update");
-    }
-    const reqRow = await createAccountUpdateRequest({
-      userId: req.user.id,
-      requestedFields: sanitized,
-    });
-    res.status(201).json({ request: reqRow });
+    const body = accountUpdateSchema.parse(req.body ?? {});
+    const request = await createAccountUpdateRequest({ userId: req.user.id, requestedFields: body.requestedFields });
+    res.status(201).json({ request });
   } catch (err) {
     next(err);
   }
 };
 
-export const listAccountUpdateRequestsHandler: RequestHandler = async (
-  req,
-  res,
-  next,
-) => {
+export const listAccountUpdateRequestsHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    const rows = await listMyAccountUpdateRequests(req.user.id);
-    res.status(200).json({ requests: rows });
+    res.status(200).json({ requests: await listMyAccountUpdateRequests(req.user.id) });
   } catch (err) {
     next(err);
   }
 };
 
-export const createSupportTicketHandler: RequestHandler = async (
-  req,
-  res,
-  next,
-) => {
+const ticketSchema = z.object({
+  subject: z.string().trim().min(3).max(120),
+  message: z.string().trim().min(1).max(5000),
+});
+
+export const createSupportTicketHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    const { subject, message } = req.body as {
-      subject?: string;
-      message?: string;
-    };
-    if (!subject || !message)
-      throw new ValidationError("subject and message are required");
-    const ticket = await createSupportTicket({
-      userId: req.user.id,
-      subject,
-      message,
-    });
+    const body = ticketSchema.parse(req.body ?? {});
+    const ticket = await createSupportTicket({ userId: req.user.id, ...body });
     res.status(201).json({ ticket });
   } catch (err) {
     next(err);
   }
 };
 
-export const listSupportTicketsHandler: RequestHandler = async (
-  req,
-  res,
-  next,
-) => {
+export const listSupportTicketsHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    const rows = await listMySupportTickets(req.user.id);
-    res.status(200).json({ tickets: rows });
+    res.status(200).json({ tickets: await listMySupportTickets(req.user.id) });
   } catch (err) {
     next(err);
   }

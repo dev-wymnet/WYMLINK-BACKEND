@@ -82,3 +82,24 @@ export class AccountInactiveError extends AppError {
     this.name = "AccountInactiveError";
   }
 }
+
+export class InsufficientBalanceError extends AppError {
+  constructor(message = "Insufficient balance") {
+    super(message, { statusCode: 400, code: "INSUFFICIENT_BALANCE" });
+    this.name = "InsufficientBalanceError";
+  }
+}
+
+export class LimitExceededError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super(message, { statusCode: 403, code: "LIMIT_EXCEEDED", details });
+    this.name = "LimitExceededError";
+  }
+}
+
+export class ServiceUnavailableError extends AppError {
+  constructor(message = "This service is not available yet. Please try again later.") {
+    super(message, { statusCode: 503, code: "SERVICE_UNAVAILABLE" });
+    this.name = "ServiceUnavailableError";
+  }
+}

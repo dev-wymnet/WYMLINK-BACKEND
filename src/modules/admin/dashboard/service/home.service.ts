@@ -1,151 +1,111 @@
-import { and, desc, eq, gte, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
 
 import { db } from "../../../../core/db/client.js";
-import {
-  users,
-  userVerifications,
-  walletLedger,
-  telecomTransactions,
-} from "../../../../core/db/schema.js";
+import { kycProfiles, users, vtuOrders, walletLedger } from "../../../../core/db/schema.js";
 
-export async function getAdminHomeSummary(input: {
-  from?: Date | undefined;
-  to?: Date | undefined;
-}) {
+const lagosMidnight = sql`(date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')`;
+
+export async function getAdminHomeSummary(input: { from?: Date | undefined; to?: Date | undefined }) {
   const { from, to } = input;
-  const dateCond = (col: any) =>
-    and(from ? gte(col, from) : sql`true`, to ? lte(col, to) : sql`true`);
+  const range = (col: any): SQL | undefined =>
+    from || to ? and(...[from ? gte(col, from) : undefined, to ? lte(col, to) : undefined].filter(Boolean) as SQL[]) : undefined;
 
-  // Recent customers (non-admin)
-  const recentCustomers = await db
-    .select({
-      id: users.id,
-      firstName: users.firstName,
-      lastName: users.lastName,
-      email: users.email,
-      phone: users.phone,
-      joinedAt: users.createdAt,
-      kycBvnStatus: userVerifications.bvnStatus,
-      kycNinStatus: userVerifications.ninStatus,
-    })
-    .from(users)
-    .leftJoin(userVerifications, eq(userVerifications.userId, users.id))
-    .where(sql`${users.role} = 'customer'`)
-    .orderBy(desc(users.createdAt))
-    .limit(10);
+  const [recentCustomers, recentTx, volume, billsUsage, customers, attention, kycQueue, drift] = await Promise.all([
+    db
+      .select({ u: users, bvn: kycProfiles.bvnStatus, nin: kycProfiles.ninStatus })
+      .from(users)
+      .leftJoin(kycProfiles, eq(kycProfiles.userId, users.id))
+      .where(eq(users.role, "customer"))
+      .orderBy(desc(users.createdAt))
+      .limit(10),
+    db
+      .select({ e: walletLedger, firstName: users.firstName, lastName: users.lastName })
+      .from(walletLedger)
+      .innerJoin(users, eq(users.id, walletLedger.userId))
+      .orderBy(desc(walletLedger.createdAt))
+      .limit(10),
+    db
+      .select({
+        totalCount: sql<number>`count(*)::int`,
+        credits: sql<string>`coalesce(sum(${walletLedger.amount}) filter (where ${walletLedger.direction} = 'credit'), 0)::text`,
+        debits: sql<string>`coalesce(sum(${walletLedger.amount}) filter (where ${walletLedger.direction} = 'debit'), 0)::text`,
+        deposits: sql<string>`coalesce(sum(${walletLedger.amount}) filter (where ${walletLedger.entryType} = 'deposit'), 0)::text`,
+      })
+      .from(walletLedger)
+      .where(range(walletLedger.createdAt)),
+    db
+      .select({
+        type: vtuOrders.product,
+        transactionCount: sql<number>`count(*)::int`,
+        delivered: sql<number>`count(*) filter (where ${vtuOrders.status} = 'success')::int`,
+        refunded: sql<number>`count(*) filter (where ${vtuOrders.status} = 'refunded')::int`,
+        totalAmount: sql<string>`coalesce(sum(${vtuOrders.amount}) filter (where ${vtuOrders.status} = 'success'), 0)::text`,
+      })
+      .from(vtuOrders)
+      .where(range(vtuOrders.createdAt))
+      .groupBy(vtuOrders.product)
+      .orderBy(desc(sql`count(*)`)),
+    db
+      .select({
+        total: sql<number>`count(*)::int`,
+        today: sql<number>`count(*) filter (where ${users.createdAt} >= ${lagosMidnight})::int`,
+        verifiedKyc: sql<number>`count(*) filter (where ${users.kycTier} > 0)::int`,
+      })
+      .from(users)
+      .where(eq(users.role, "customer")),
+    db.select({ c: sql<number>`count(*)::int` }).from(vtuOrders).where(inArray(vtuOrders.status, ["unknown", "processing", "pending"])),
+    db
+      .select({ c: sql<number>`count(*)::int` })
+      .from(kycProfiles)
+      .where(sql`${kycProfiles.bvnStatus} = 'pending' or ${kycProfiles.ninStatus} = 'pending'`),
+    db.execute(sql`select count(*)::int as c from app.wallet_drift`),
+  ]);
 
-  // Recent transactions from wallet ledger (authoritative)
-  const recentTx = await db
-    .select({
-      id: walletLedger.id,
-      userId: walletLedger.userId,
-      firstName: users.firstName,
-      lastName: users.lastName,
-      type: walletLedger.transactionType,
-      amount: walletLedger.amount,
-      currency: walletLedger.currencyCode,
-      status: walletLedger.status,
-      createdAt: walletLedger.createdAt,
-    })
-    .from(walletLedger)
-    .innerJoin(users, eq(users.id, walletLedger.userId))
-    .orderBy(desc(walletLedger.createdAt))
-    .limit(10);
-
-  // Analytics: transaction volume within range (wallet ledger)
-  const [volume] = await db
-    .select({
-      totalCount: sql<number>`count(*)::int`,
-      totalAmount: sql<string>`COALESCE(sum(${walletLedger.amount})::text, '0')`,
-      successCount: sql<number>`count(*) filter (where ${walletLedger.status} = 'success')::int`,
-      failedCount: sql<number>`count(*) filter (where ${walletLedger.status} = 'failed')::int`,
-      pendingCount: sql<number>`count(*) filter (where ${walletLedger.status} = 'pending')::int`,
-    })
-    .from(walletLedger)
-    .where(dateCond(walletLedger.createdAt));
-
-  // Bill/product usage analytics (telecom transactions)
-  const billsUsage = await db
-    .select({
-      type: telecomTransactions.productType,
-      transactionCount: sql<number>`count(*)::int`,
-      totalAmount: sql<string>`COALESCE(sum(${telecomTransactions.amount})::text, '0')`,
-    })
-    .from(telecomTransactions)
-    .where(dateCond(telecomTransactions.createdAt))
-    .groupBy(telecomTransactions.productType)
-    .orderBy(desc(sql`count(*)`));
-
-  // Customer metrics
-  const [totalCustomersRow] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(users)
-    .where(sql`${users.role} = 'customer'`);
-  const totalCustomers = totalCustomersRow?.c ?? 0;
-
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const [todayCustomersRow] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(users)
-    .where(
-      and(sql`${users.role} = 'customer'`, gte(users.createdAt, startOfToday)),
-    );
-
-  const [verifiedKycAgg] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(userVerifications)
-    .where(
-      sql`${userVerifications.bvnStatus} = 'VERIFIED' OR ${userVerifications.ninStatus} = 'VERIFIED'`,
-    );
+  const kyc = (bvn: string | null, nin: string | null) =>
+    bvn === "verified" || nin === "verified" ? "verified" : bvn === "pending" || nin === "pending" ? "review" : bvn === "failed" || nin === "failed" ? "failed" : "none";
 
   return {
-    recentCustomers: recentCustomers.map((u) => ({
+    recentCustomers: recentCustomers.map(({ u, bvn, nin }) => ({
       id: u.id,
-      name: [u.firstName, u.lastName].filter(Boolean).join(" "),
+      name: `${u.firstName} ${u.lastName}`.trim(),
       email: u.email,
       phone: u.phone,
-      joinedAt: u.joinedAt,
-      kycStatus:
-        u.kycBvnStatus === "VERIFIED" || u.kycNinStatus === "VERIFIED"
-          ? "verified"
-          : u.kycBvnStatus === "FAILED" || u.kycNinStatus === "FAILED"
-            ? "failed"
-            : "pending",
+      joinedAt: u.createdAt,
+      kycStatus: kyc(bvn, nin),
     })),
-    recentTransactions: recentTx.map((t) => ({
-      id: t.id,
-      customerId: t.userId,
-      customerName: [t.firstName, t.lastName].filter(Boolean).join(" "),
-      type: t.type,
-      amount: t.amount,
-      currency: t.currency,
-      status: t.status,
-      createdAt: t.createdAt,
+    recentTransactions: recentTx.map(({ e, firstName, lastName }) => ({
+      id: e.id,
+      customerId: e.userId,
+      customerName: `${firstName} ${lastName}`.trim(),
+      type: e.entryType,
+      direction: e.direction,
+      amount: e.amount,
+      currency: "NGN",
+      status: "success",
+      description: e.description,
+      createdAt: e.createdAt,
     })),
     analytics: {
-      range: {
-        from: from ?? null,
-        to: to ?? null,
-        default: from || to ? null : "current_month",
-      },
+      range: { from: from ?? null, to: to ?? null, default: from || to ? null : "all_time" },
       transactionVolume: {
-        totalCount: volume?.totalCount ?? 0,
-        totalAmount: volume?.totalAmount ?? "0",
-        success: volume?.successCount ?? 0,
-        failed: volume?.failedCount ?? 0,
-        pending: volume?.pendingCount ?? 0,
+        totalCount: volume[0]?.totalCount ?? 0,
+        totalCredits: volume[0]?.credits ?? "0",
+        totalDebits: volume[0]?.debits ?? "0",
+        totalDeposits: volume[0]?.deposits ?? "0",
       },
-      billsUsage: billsUsage.map((b) => ({
-        type: b.type,
-        transactionCount: b.transactionCount,
-        totalAmount: b.totalAmount,
-      })),
+      billsUsage,
       customers: {
-        total: totalCustomers,
-        today: todayCustomersRow?.c ?? 0,
-        verifiedKyc: verifiedKycAgg?.c ?? 0,
+        total: customers[0]?.total ?? 0,
+        today: customers[0]?.today ?? 0,
+        verifiedKyc: customers[0]?.verifiedKyc ?? 0,
       },
+    },
+    attention: {
+      // Purchases the provider never confirmed: resolve under Bills.
+      unconfirmedOrders: attention[0]?.c ?? 0,
+      kycAwaitingReview: kycQueue[0]?.c ?? 0,
+      // Wallets whose balance disagrees with their ledger. Must always be 0.
+      walletDrift: Number((drift.rows[0] as { c: number } | undefined)?.c ?? 0),
     },
   };
 }

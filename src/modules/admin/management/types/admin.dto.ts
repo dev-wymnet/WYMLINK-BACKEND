@@ -5,9 +5,9 @@ export const createAdminSchema = z.object({
   lastName: z.string().min(1).max(100),
   email: z.string().email(),
   phone: z.string().min(7).max(20).optional(),
-  countryCode: z.string().min(2).max(3),
+  countryCode: z.string().min(2).max(3).optional(), // Nigeria-only; kept for older clients
   role: z.enum(["business_admin", "finance_admin", "super_admin"]),
-  temporaryPassword: z.string().min(8).max(72),
+  temporaryPassword: z.string().min(12).max(72),
 });
 
 export type CreateAdminDto = z.infer<typeof createAdminSchema>;

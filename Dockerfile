@@ -37,10 +37,8 @@ COPY --from=deps-dev /app/node_modules ./node_modules
 
 COPY package*.json ./
 COPY tsconfig.json ./
-COPY drizzle.config.ts ./
 
 COPY src ./src
-COPY drizzle ./drizzle
 
 RUN npm run build
 
@@ -55,7 +53,8 @@ WORKDIR /app
 
 COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/drizzle ./drizzle
+# SQL migrations applied at start by dist/scripts/migrate.js
+COPY db/migrations ./db/migrations
 COPY package*.json ./
 COPY entrypoint.sh ./entrypoint.sh
 
@@ -66,6 +65,6 @@ USER node
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
-CMD node -e "fetch('http://localhost:3000/api/v1/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD node -e "fetch('http://localhost:'+(process.env.PORT||3000)+'/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["./entrypoint.sh"]

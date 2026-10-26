@@ -170,7 +170,7 @@ create table app.tier_limits (
 );
 create trigger tier_limits_touch before update on app.tier_limits for each row execute function app.touch_updated_at();
 insert into app.tier_limits (tier, label, single_max, daily_max, balance_max) values
-  (0, 'Unverified',          0,         0,         0),
+  (0, 'Unverified',          10000,     10000,     50000),
   (1, 'BVN or NIN verified', 50000,     50000,     300000),
   (2, 'BVN and NIN verified',200000,    200000,    500000),
   (3, 'Full KYC',            5000000,   5000000,   null);

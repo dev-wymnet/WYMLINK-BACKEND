@@ -28,9 +28,6 @@ export const debugEnvHandler: RequestHandler = async (_req, res) => {
     databaseUrl: {
       present: Boolean(env.DATABASE_URL),
     },
-    redis: {
-      present: Boolean(env.REDIS_URL),
-    },
     jwt: {
       accessSecret: redact(env.JWT_ACCESS_SECRET),
     },
@@ -54,7 +51,7 @@ export const debugDbHandler: RequestHandler = async (_req, res) => {
       result.checks.ping = true;
 
       const usersColumns = await client.query(
-        "SELECT column_name FROM information_schema.columns WHERE table_name = 'users' ORDER BY ordinal_position",
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'app' AND table_name = 'users' ORDER BY ordinal_position",
       );
 
       result.checks.usersTable = usersColumns.rows.length > 0;

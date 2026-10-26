@@ -11,3 +11,4 @@ export const pool = new Pool({
   statement_timeout: config.PG_STATEMENT_TIMEOUT_MS,
   query_timeout: config.PG_QUERY_TIMEOUT_MS,
 });
+

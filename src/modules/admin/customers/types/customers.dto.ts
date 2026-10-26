@@ -16,7 +16,7 @@ const isoDate = z.string().datetime({ offset: true }).or(z.string().date());
 
 export const listCustomersSchema = z.object({
   search: z.string().min(1).max(100).optional(),
-  kycStatus: z.enum(["verified", "failed", "pending", "review"]).optional(),
+  kycStatus: z.enum(["verified", "failed", "pending", "review", "none"]).optional(),
   status: z.enum(["active", "disabled"]).optional(),
   country: z.string().min(2).max(3).optional(),
   currency: z.string().length(3).optional(),
@@ -34,15 +34,14 @@ export const listCustomerTransactionsSchema = z.object({
   from: isoDate.optional(),
   to: isoDate.optional(),
   type: z.string().min(1).max(32).optional(),
-  status: z.string().min(1).max(32).optional(),
-  currency: z.string().length(3).optional(),
+  direction: z.enum(["credit", "debit"]).optional(),
   minAmount: z
     .string()
-    .regex(/^\d+(?:\.\d{1,8})?$/)
+    .regex(/^\d+(?:\.\d{1,2})?$/)
     .optional(),
   maxAmount: z
     .string()
-    .regex(/^\d+(?:\.\d{1,8})?$/)
+    .regex(/^\d+(?:\.\d{1,2})?$/)
     .optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(200).default(50),

@@ -1,204 +1,80 @@
-import { and, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, lte, or, sql, type SQL } from "drizzle-orm";
 
 import { db } from "../../../../core/db/client.js";
-import {
-  users,
-  walletLedger,
-  wallets,
-  payouts,
-  telecomTransactions,
-} from "../../../../core/db/schema.js";
+import { deposits, payouts, users, vtuOrders, walletLedger, wallets } from "../../../../core/db/schema.js";
+import type { ListPaymentsDto } from "../types/payments.dto.js";
 
-export type AdminPaymentRow = {
-  id: string;
-  reference: string;
-  userId: string;
-  customerName: string | null;
-  type: string;
-  direction: string;
-  amount: string;
-  currency: string;
-  balanceBefore: string;
-  balanceAfter: string;
-  status: string;
-  provider?: string | null;
-  providerReference?: string | null;
-  description?: string | null;
-  date: Date;
-};
+const escapeLike = (s: string) => s.replace(/[%_\\]/g, (ch) => "\\" + ch);
 
-export async function listLedgerPayments(input: {
-  from?: Date | undefined;
-  to?: Date | undefined;
-  customerId?: string | undefined;
-  search?: string | undefined;
-  country?: string | undefined;
-  currency?: string | undefined;
-  status?: string | undefined;
-  type?: string | undefined;
-  direction?: "credit" | "debit" | undefined;
-  provider?: string | undefined;
-  limit: number;
-  offset: number;
-  sort: "date" | "amount";
-  order: "asc" | "desc";
-}): Promise<AdminPaymentRow[]> {
-  const conditions: any[] = [];
-  if (input.from) conditions.push(gte(walletLedger.createdAt, input.from));
-  if (input.to) conditions.push(lte(walletLedger.createdAt, input.to));
-  if (input.customerId)
-    conditions.push(eq(walletLedger.userId, input.customerId));
-  if (input.currency)
-    conditions.push(eq(walletLedger.currencyCode, input.currency));
-  if (input.status) conditions.push(eq(walletLedger.status, input.status));
-  if (input.type) conditions.push(eq(walletLedger.transactionType, input.type));
-  if (input.direction)
-    conditions.push(eq(walletLedger.direction, input.direction));
-  if (input.search) {
-    const like = `%${input.search}%`;
-    conditions.push(
+function where(f: ListPaymentsDto) {
+  const c: SQL[] = [];
+  if (f.from) c.push(gte(walletLedger.createdAt, new Date(f.from)));
+  if (f.to) c.push(lte(walletLedger.createdAt, new Date(f.to)));
+  if (f.customerId) c.push(eq(walletLedger.userId, f.customerId));
+  if (f.type) c.push(eq(walletLedger.entryType, f.type));
+  if (f.direction) c.push(eq(walletLedger.direction, f.direction));
+  if (f.search) {
+    const like = `%${escapeLike(f.search)}%`;
+    c.push(
       or(
-        ilike(walletLedger.referenceCode, like),
-        ilike(walletLedger.relatedOrderId, like),
+        ilike(walletLedger.reference, like),
+        ilike(walletLedger.description, like),
         ilike(users.firstName, like),
         ilike(users.lastName, like),
-        ilike(users.email, like),
+        sql`${users.email}::text ilike ${like}`,
         ilike(users.phone, like),
-      ),
+      )!,
     );
   }
-
-  const orderBy =
-    input.sort === "amount"
-      ? sql`${walletLedger.amount} ${sql.raw(input.order)}`
-      : sql`${walletLedger.createdAt} ${sql.raw(input.order)}`;
-
-  const rows = await db
-    .select({
-      id: walletLedger.id,
-      reference: walletLedger.referenceCode,
-      userId: walletLedger.userId,
-      customerFirst: users.firstName,
-      customerLast: users.lastName,
-      type: walletLedger.transactionType,
-      direction: walletLedger.direction,
-      amount: walletLedger.amount,
-      currency: walletLedger.currencyCode,
-      balanceBefore: walletLedger.balanceBefore,
-      balanceAfter: walletLedger.balanceAfter,
-      status: walletLedger.status,
-      description: walletLedger.description,
-      date: walletLedger.createdAt,
-    })
-    .from(walletLedger)
-    .innerJoin(users, eq(users.id, walletLedger.userId))
-    .where(conditions.length ? and(...conditions) : sql`true`)
-    .orderBy(orderBy)
-    .limit(input.limit)
-    .offset(input.offset);
-
-  return rows.map((r) => ({
-    id: r.id,
-    reference: r.reference,
-    userId: r.userId,
-    customerName:
-      [r.customerFirst, r.customerLast].filter(Boolean).join(" ") || null,
-    type: r.type,
-    direction: r.direction,
-    amount: r.amount,
-    currency: r.currency,
-    balanceBefore: r.balanceBefore,
-    balanceAfter: r.balanceAfter,
-    status: r.status,
-    description: r.description ?? undefined,
-    date: r.date,
-  }));
+  return c.length ? and(...c) : undefined;
 }
 
-export async function countLedgerPayments(
-  filters: Parameters<typeof listLedgerPayments>[0],
-) {
-  const conditions: any[] = [];
-  if (filters.from) conditions.push(gte(walletLedger.createdAt, filters.from));
-  if (filters.to) conditions.push(lte(walletLedger.createdAt, filters.to));
-  if (filters.customerId)
-    conditions.push(eq(walletLedger.userId, filters.customerId));
-  if (filters.currency)
-    conditions.push(eq(walletLedger.currencyCode, filters.currency));
-  if (filters.status) conditions.push(eq(walletLedger.status, filters.status));
-  if (filters.type)
-    conditions.push(eq(walletLedger.transactionType, filters.type));
-  if (filters.direction)
-    conditions.push(eq(walletLedger.direction, filters.direction));
-  if (filters.search) {
-    const like = `%${filters.search}%`;
-    conditions.push(
-      or(
-        ilike(walletLedger.referenceCode, like),
-        ilike(walletLedger.relatedOrderId, like),
-        ilike(users.firstName, like),
-        ilike(users.lastName, like),
-        ilike(users.email, like),
-        ilike(users.phone, like),
-      ),
-    );
-  }
-  const row = await db
+export async function listLedgerPayments(f: ListPaymentsDto) {
+  const dir = f.order === "asc" ? asc : desc;
+  return db
+    .select({ e: walletLedger, firstName: users.firstName, lastName: users.lastName })
+    .from(walletLedger)
+    .innerJoin(users, eq(users.id, walletLedger.userId))
+    .where(where(f))
+    .orderBy(f.sort === "amount" ? dir(walletLedger.amount) : dir(walletLedger.createdAt))
+    .limit(f.limit)
+    .offset((f.page - 1) * f.limit);
+}
+
+export async function countLedgerPayments(f: ListPaymentsDto) {
+  const [row] = await db
     .select({ c: sql<number>`count(*)::int` })
     .from(walletLedger)
     .innerJoin(users, eq(users.id, walletLedger.userId))
-    .where(conditions.length ? and(...conditions) : sql`true`);
-  return row[0]?.c ?? 0;
+    .where(where(f));
+  return row?.c ?? 0;
 }
 
 export async function getLedgerPaymentById(id: string) {
-  const rows = await db
-    .select({
-      id: walletLedger.id,
-      reference: walletLedger.referenceCode,
-      userId: walletLedger.userId,
-      walletId: walletLedger.walletId,
-      type: walletLedger.transactionType,
-      direction: walletLedger.direction,
-      amount: walletLedger.amount,
-      currency: walletLedger.currencyCode,
-      balanceBefore: walletLedger.balanceBefore,
-      balanceAfter: walletLedger.balanceAfter,
-      description: walletLedger.description,
-      status: walletLedger.status,
-      date: walletLedger.createdAt,
-      userFirst: users.firstName,
-      userLast: users.lastName,
-      email: users.email,
-      phone: users.phone,
-      countryCode: users.countryCode,
-      currencyCode: users.currencyCode,
-      walletStatus: wallets.status,
-    })
+  const [row] = await db
+    .select({ e: walletLedger, user: users, wallet: wallets })
     .from(walletLedger)
     .innerJoin(users, eq(users.id, walletLedger.userId))
     .innerJoin(wallets, eq(wallets.id, walletLedger.walletId))
     .where(eq(walletLedger.id, id))
     .limit(1);
-  return rows[0] ?? null;
+  return row ?? null;
 }
 
-export async function findRelatedPayoutByReference(reference: string) {
-  const rows = await db
-    .select()
-    .from(payouts)
-    .where(eq(payouts.reference, reference))
-    .limit(1);
-  return rows[0] ?? null;
-}
-
-export async function findTelecomByInternalReference(
-  internalReference: string,
-) {
-  const rows = await db
-    .select()
-    .from(telecomTransactions)
-    .where(eq(telecomTransactions.internalReference, internalReference))
-    .limit(1);
-  return rows[0] ?? null;
+// The order, payout or deposit a ledger line belongs to.
+export async function findRelated(relatedType: string | null, relatedId: string | null) {
+  if (!relatedId) return null;
+  if (relatedType === "vtu_order") {
+    const [o] = await db.select().from(vtuOrders).where(eq(vtuOrders.id, relatedId)).limit(1);
+    return o ? { kind: "vtu_order" as const, id: o.id, provider: o.provider, reference: o.providerReference, status: o.status } : null;
+  }
+  if (relatedType === "payout") {
+    const [p] = await db.select().from(payouts).where(eq(payouts.id, relatedId)).limit(1);
+    return p ? { kind: "payout" as const, id: p.id, provider: p.provider, reference: p.providerReference, status: p.status } : null;
+  }
+  if (relatedType === "deposit") {
+    const [d] = await db.select().from(deposits).where(eq(deposits.id, relatedId)).limit(1);
+    return d ? { kind: "deposit" as const, id: d.id, provider: d.provider, reference: d.providerReference, status: d.status } : null;
+  }
+  return null;
 }

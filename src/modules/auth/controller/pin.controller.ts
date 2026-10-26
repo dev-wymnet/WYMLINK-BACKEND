@@ -8,6 +8,8 @@ import {
   requestTransactionPinReset,
   resetTransactionPinWithOtp,
   changePasscode,
+  createPasscode,
+  verifyPasscode,
 } from "../service/pin.service.js";
 
 export const pinStatusHandler: RequestHandler = async (req, res, next) => {
@@ -104,6 +106,31 @@ export const changePasscodeHandler: RequestHandler = async (req, res, next) => {
       currentPasscode: body.currentPasscode,
       newPasscode: body.newPasscode,
     });
+    res.status(200).json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+const passcodeBody = z.object({ passcode: z.string().regex(/^\d{6}$/) });
+
+// Mobile app: first-time passcode (unlocks the app).
+export const setPasscodeHandler: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const body = passcodeBody.parse(req.body ?? {});
+    await createPasscode({ userId: req.user.id, passcode: body.passcode });
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const verifyPasscodeHandler: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const body = passcodeBody.parse(req.body ?? {});
+    await verifyPasscode({ userId: req.user.id, passcode: body.passcode });
     res.status(200).json({ ok: true });
   } catch (err) {
     next(err);

@@ -1,155 +1,68 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "../../../core/db/client.js";
-import { telecomTransactions, walletLedger } from "../../../core/db/schema.js";
+import { vtuOrders, walletLedger } from "../../../core/db/schema.js";
 import { getMe } from "../../user/service/user.service.js";
 import { getWalletDetails } from "../../wallet/service/wallet.service.js";
+import { toOrderDto } from "../../vtu/vtu.service.js";
 
-function asNumber(input: unknown): number {
-  const n = typeof input === "number" ? input : Number(input);
+const num = (v: unknown) => {
+  const n = Number(v);
   return Number.isFinite(n) ? n : 0;
-}
-
-function fullName(user: { firstName: string; lastName: string }) {
-  return `${user.firstName} ${user.lastName}`.trim();
-}
+};
 
 export async function getDashboardHome(userId: string) {
-  const [user, walletDetails] = await Promise.all([
+  const [user, { wallet, virtualAccount }, totals, counts, ledger, orders] = await Promise.all([
     getMe(userId),
     getWalletDetails(userId),
+    // Funded = deposits in; spent = purchases + payouts + fees, net of refunds.
+    db
+      .select({
+        funded: sql<string>`coalesce(sum(${walletLedger.amount}) filter (where ${walletLedger.entryType} in ('deposit', 'transfer_in')), 0)::text`,
+        spent: sql<string>`coalesce(sum(${walletLedger.amount}) filter (where ${walletLedger.direction} = 'debit'), 0)::text`,
+        refunded: sql<string>`coalesce(sum(${walletLedger.amount}) filter (where ${walletLedger.entryType} in ('refund', 'reversal')), 0)::text`,
+      })
+      .from(walletLedger)
+      .where(eq(walletLedger.userId, userId)),
+    db
+      .select({
+        airtime: sql<number>`count(*) filter (where ${vtuOrders.product} = 'airtime')::int`,
+        data: sql<number>`count(*) filter (where ${vtuOrders.product} = 'data')::int`,
+      })
+      .from(vtuOrders)
+      .where(and(eq(vtuOrders.userId, userId), eq(vtuOrders.status, "success"))),
+    db.select().from(walletLedger).where(eq(walletLedger.userId, userId)).orderBy(desc(walletLedger.createdAt)).limit(5),
+    db.select().from(vtuOrders).where(eq(vtuOrders.userId, userId)).orderBy(desc(vtuOrders.createdAt)).limit(5),
   ]);
 
-  const [walletAgg, telecomAgg] = await Promise.all([
-    getWalletAnalytics(userId),
-    getTelecomAnalytics(userId),
-  ]);
-
-  const recentTransactions = await listRecentTransactions({ userId, limit: 5 });
+  const t = totals[0];
+  const recentTransactions = [
+    // Purchases show as orders (with their delivery status); their ledger lines are skipped.
+    ...ledger
+      .filter((l) => l.relatedType !== "vtu_order")
+      .map((l) => ({ id: l.id, source: "wallet" as const, transactionType: l.entryType, amount: num(l.amount), status: "success", timestamp: l.createdAt })),
+    ...orders.map((o) => {
+      const dto = toOrderDto(o);
+      return { id: o.id, source: "telecom" as const, transactionType: o.product, amount: num(o.amount), status: dto.status, timestamp: o.createdAt };
+    }),
+  ]
+    .sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())
+    .slice(0, 5);
 
   return {
-    user: {
-      id: user.id,
-      fullName: fullName(user),
-      email: user.email,
-      phone: user.phone,
-    },
+    user: { id: user.id, fullName: `${user.firstName} ${user.lastName}`.trim(), email: user.email, phone: user.phone },
     wallet: {
-      balance: asNumber(walletDetails.wallet.availableBalance),
-      currency: walletDetails.wallet.currencyCode,
-      accountNumber: walletDetails.reserved?.accountNumber ?? "",
-      bankName: walletDetails.reserved?.bankName ?? "",
+      balance: num(wallet.availableBalance),
+      currency: wallet.currencyCode,
+      accountNumber: virtualAccount?.accountNumber ?? "",
+      bankName: virtualAccount?.bankName ?? "",
     },
     analytics: {
-      totalFunded: walletAgg.totalFunded,
-      totalSpent: walletAgg.totalSpent,
-      airtimePurchases: telecomAgg.airtimePurchases,
-      dataPurchases: telecomAgg.dataPurchases,
+      totalFunded: num(t?.funded),
+      totalSpent: Math.max(0, num(t?.spent) - num(t?.refunded)),
+      airtimePurchases: counts[0]?.airtime ?? 0,
+      dataPurchases: counts[0]?.data ?? 0,
     },
     recentTransactions,
   };
-}
-
-async function getWalletAnalytics(userId: string) {
-  const fundedRows = await db
-    .select({
-      total: sql<string>`coalesce(sum(${walletLedger.amount}), 0)::text`,
-    })
-    .from(walletLedger)
-    .where(
-      sql`${walletLedger.userId} = ${userId} and ${walletLedger.direction} = 'credit' and ${walletLedger.status} = 'success' and ${walletLedger.transactionType} = 'funding'`,
-    );
-
-  const spentRows = await db
-    .select({
-      total: sql<string>`coalesce(sum(${walletLedger.amount}), 0)::text`,
-    })
-    .from(walletLedger)
-    .where(
-      sql`${walletLedger.userId} = ${userId} and ${walletLedger.direction} = 'debit' and ${walletLedger.status} = 'success'`,
-    );
-
-  return {
-    totalFunded: asNumber(fundedRows[0]?.total),
-    totalSpent: asNumber(spentRows[0]?.total),
-  };
-}
-
-async function getTelecomAnalytics(userId: string) {
-  const airtimeRows = await db
-    .select({ count: sql<string>`count(*)::text` })
-    .from(telecomTransactions)
-    .where(
-      sql`${telecomTransactions.userId} = ${userId} and ${telecomTransactions.productType} = 'airtime'`,
-    );
-
-  const dataRows = await db
-    .select({ count: sql<string>`count(*)::text` })
-    .from(telecomTransactions)
-    .where(
-      sql`${telecomTransactions.userId} = ${userId} and ${telecomTransactions.productType} = 'data'`,
-    );
-
-  return {
-    airtimePurchases: Number(airtimeRows[0]?.count ?? 0),
-    dataPurchases: Number(dataRows[0]?.count ?? 0),
-  };
-}
-
-async function listRecentTransactions(input: {
-  userId: string;
-  limit: number;
-}) {
-  const [walletRows, telecomRows] = await Promise.all([
-    db
-      .select({
-        id: walletLedger.id,
-        type: walletLedger.transactionType,
-        amount: walletLedger.amount,
-        status: walletLedger.status,
-        createdAt: walletLedger.createdAt,
-      })
-      .from(walletLedger)
-      .where(eq(walletLedger.userId, input.userId))
-      .orderBy(desc(walletLedger.createdAt))
-      .limit(input.limit),
-    db
-      .select({
-        id: telecomTransactions.id,
-        type: telecomTransactions.productType,
-        amount: telecomTransactions.amount,
-        status: telecomTransactions.status,
-        createdAt: telecomTransactions.createdAt,
-      })
-      .from(telecomTransactions)
-      .where(eq(telecomTransactions.userId, input.userId))
-      .orderBy(desc(telecomTransactions.createdAt))
-      .limit(input.limit),
-  ]);
-
-  const normalized = [
-    ...walletRows.map((r) => ({
-      id: r.id,
-      source: "wallet" as const,
-      transactionType: r.type,
-      amount: asNumber(r.amount),
-      status: r.status,
-      timestamp: r.createdAt,
-    })),
-    ...telecomRows.map((r) => ({
-      id: r.id,
-      source: "telecom" as const,
-      transactionType: r.type,
-      amount: asNumber(r.amount),
-      status: r.status,
-      timestamp: r.createdAt,
-    })),
-  ];
-
-  return normalized
-    .sort(
-      (a, b) =>
-        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-    )
-    .slice(0, input.limit);
 }

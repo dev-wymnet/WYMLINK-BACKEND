@@ -1,600 +1,340 @@
+// Drizzle mapping of the Wymlink schema (db/migrations/0001_wymlink_core.sql).
+// The SQL file is the source of truth: constraints, triggers and app.post_entry()
+// live there. Balances and ledger lines must only change through
+// app.post_entry (see modules/wallet/repository/wallet.repository.ts).
 import {
-  pgTable,
+  pgSchema,
   uuid,
   text,
   timestamp,
   boolean,
   numeric,
   jsonb,
-  index,
-  uniqueIndex,
+  integer,
+  smallint,
+  date,
+  primaryKey,
 } from "drizzle-orm/pg-core";
 
-export const countries = pgTable(
-  "countries",
+export const app = pgSchema("app");
+
+const ts = (name: string) => timestamp(name, { withTimezone: true });
+const money = (name: string) => numeric(name, { precision: 18, scale: 2 });
+
+export const users = app.table("users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  firstName: text("first_name").notNull(),
+  lastName: text("last_name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  emailVerifiedAt: ts("email_verified_at"),
+  phoneVerifiedAt: ts("phone_verified_at"),
+  passwordHash: text("password_hash").notNull(),
+  transactionPinHash: text("transaction_pin_hash"),
+  passcodeHash: text("passcode_hash"),
+  role: text("role").notNull().default("customer"),
+  status: text("status").notNull().default("active"),
+  kycTier: smallint("kyc_tier").notNull().default(0),
+  reloadlyEnabled: boolean("reloadly_enabled").notNull().default(false),
+  lastLoginAt: ts("last_login_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+  closedAt: ts("closed_at"),
+});
+
+export const sessions = app.table("sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  kind: text("kind").notNull(), // web | mobile | admin
+  refreshTokenHash: text("refresh_token_hash").notNull(),
+  previousTokenHash: text("previous_token_hash"),
+  deviceId: text("device_id"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  expiresAt: ts("expires_at").notNull(),
+  lastUsedAt: ts("last_used_at").notNull().defaultNow(),
+  revokedAt: ts("revoked_at"),
+  revokedReason: text("revoked_reason"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+export const pinAttempts = app.table(
+  "pin_attempts",
   {
-    code: text("code").primaryKey(),
-    name: text("name").notNull(),
-    currencyCode: text("currency_code").notNull(),
-    enabled: boolean("enabled").notNull().default(false),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
+    userId: uuid("user_id").notNull(),
+    kind: text("kind").notNull(), // transaction_pin | passcode
+    failedAttempts: integer("failed_attempts").notNull().default(0),
+    lockedUntil: ts("locked_until"),
+    lastFailedAt: ts("last_failed_at"),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
   },
-  (t) => ({
-    enabledIdx: index("countries_enabled_idx").on(t.enabled),
-  }),
+  (t) => [primaryKey({ columns: [t.userId, t.kind] })],
 );
 
-// Tracks per-user PIN/passcode attempt counters and lockouts
-export const pinSecurity = pgTable(
-  "pin_security",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    pinType: text("pin_type").notNull(), // "passcode" | "transaction"
-    failedAttempts: numeric("failed_attempts", { precision: 10, scale: 0 })
-      .notNull()
-      .default("0"),
-    lockedUntil: timestamp("locked_until", { withTimezone: true }),
-    lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => ({
-    userTypeUnique: uniqueIndex("pin_security_user_type_unique").on(
-      t.userId,
-      t.pinType,
-    ),
-    userIdIdx: index("pin_security_user_id_idx").on(t.userId),
-  }),
-);
+export const otpCodes = app.table("otp_codes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  purpose: text("purpose").notNull(),
+  codeHash: text("code_hash").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  expiresAt: ts("expires_at").notNull(),
+  consumedAt: ts("consumed_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
 
-// Email OTP requests for password/passcode/transaction pin resets
-export const otpRequests = pgTable(
-  "otp_requests",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    purpose: text("purpose").notNull(), // reset_password | reset_passcode | reset_transaction_pin
-    codeHash: text("code_hash").notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    consumedAt: timestamp("consumed_at", { withTimezone: true }),
-    attempts: numeric("attempts", { precision: 10, scale: 0 })
-      .notNull()
-      .default("0"),
-    metadata: jsonb("metadata"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    userIdIdx: index("otp_requests_user_id_idx").on(t.userId),
-    purposeIdx: index("otp_requests_purpose_idx").on(t.purpose),
-    expiresAtIdx: index("otp_requests_expires_at_idx").on(t.expiresAt),
-  }),
-);
+export const kycProfiles = app.table("kyc_profiles", {
+  userId: uuid("user_id").primaryKey(),
+  bvnHash: text("bvn_hash"),
+  bvnLast4: text("bvn_last4"),
+  bvnStatus: text("bvn_status").notNull().default("none"), // none | pending | verified | failed
+  bvnVerifiedAt: ts("bvn_verified_at"),
+  ninHash: text("nin_hash"),
+  ninLast4: text("nin_last4"),
+  ninStatus: text("nin_status").notNull().default("none"),
+  ninVerifiedAt: ts("nin_verified_at"),
+  legalFirstName: text("legal_first_name"),
+  legalLastName: text("legal_last_name"),
+  dateOfBirth: date("date_of_birth"),
+  provider: text("provider"),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-export const auditLogs = pgTable(
-  "audit_logs",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    actorAdminId: uuid("actor_admin_id"),
-    actorRole: text("actor_role"),
-    action: text("action").notNull(),
-    targetType: text("target_type"),
-    targetId: text("target_id"),
-    ip: text("ip"),
-    userAgent: text("user_agent"),
-    success: boolean("success").notNull().default(true),
-    reason: text("reason"),
-    before: jsonb("before"),
-    after: jsonb("after"),
-    requestId: text("request_id"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => ({
-    actionIdx: index("audit_logs_action_idx").on(t.action),
-    actorIdx: index("audit_logs_actor_idx").on(t.actorAdminId),
-    createdAtIdx: index("audit_logs_created_at_idx").on(t.createdAt),
-  }),
-);
+export const kycAttempts = app.table("kyc_attempts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  kind: text("kind").notNull(), // bvn | nin | bvn_account_match
+  outcome: text("outcome").notNull(), // started | otp_sent | verified | failed | error
+  provider: text("provider").notNull(),
+  providerReference: text("provider_reference"),
+  failureReason: text("failure_reason"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
 
-export const payouts = pgTable(
-  "payouts",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    walletId: uuid("wallet_id")
-      .notNull()
-      .references(() => wallets.id, { onDelete: "cascade" }),
+export const tierLimits = app.table("tier_limits", {
+  tier: smallint("tier").primaryKey(),
+  label: text("label").notNull(),
+  singleMax: money("single_max").notNull(),
+  dailyMax: money("daily_max").notNull(),
+  balanceMax: money("balance_max"),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-    reference: text("reference").notNull(),
-    amount: numeric("amount", { precision: 20, scale: 8 }).notNull(),
-    currencyCode: text("currency_code").notNull(),
+export const wallets = app.table("wallets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  currencyCode: text("currency_code").notNull().default("NGN"),
+  availableBalance: money("available_balance").notNull().default("0"),
+  status: text("status").notNull().default("active"), // active | frozen | closed
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-    destinationBankCode: text("destination_bank_code").notNull(),
-    destinationAccountNumber: text("destination_account_number").notNull(),
-    destinationAccountName: text("destination_account_name").notNull(),
+export const walletLedger = app.table("wallet_ledger", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  walletId: uuid("wallet_id").notNull(),
+  userId: uuid("user_id").notNull(),
+  entryType: text("entry_type").notNull(),
+  direction: text("direction").notNull(), // credit | debit
+  amount: money("amount").notNull(),
+  balanceBefore: money("balance_before").notNull(),
+  balanceAfter: money("balance_after").notNull(),
+  reference: text("reference").notNull(),
+  relatedType: text("related_type"),
+  relatedId: uuid("related_id"),
+  description: text("description").notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
 
-    status: text("status").notNull().default("PENDING"),
-    provider: text("provider"),
-    providerReference: text("provider_reference"),
-    lastError: text("last_error"),
+export const virtualAccounts = app.table("virtual_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  walletId: uuid("wallet_id").notNull(),
+  provider: text("provider").notNull(),
+  providerReference: text("provider_reference").notNull(),
+  accountNumber: text("account_number").notNull(),
+  accountName: text("account_name").notNull(),
+  bankName: text("bank_name").notNull(),
+  status: text("status").notNull().default("active"),
+  raw: jsonb("raw"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-    attempts: numeric("attempts", { precision: 10, scale: 0 })
-      .notNull()
-      .default("0"),
-    nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
+export const deposits = app.table("deposits", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  walletId: uuid("wallet_id").notNull(),
+  virtualAccountId: uuid("virtual_account_id").notNull(),
+  provider: text("provider").notNull(),
+  providerReference: text("provider_reference").notNull(),
+  amount: money("amount").notNull(),
+  fee: money("fee").notNull().default("0"),
+  senderName: text("sender_name"),
+  senderBank: text("sender_bank"),
+  senderAccountLast4: text("sender_account_last4"),
+  status: text("status").notNull().default("detected"),
+  ledgerEntryId: uuid("ledger_entry_id"),
+  raw: jsonb("raw"),
+  detectedAt: ts("detected_at").notNull().defaultNow(),
+  creditedAt: ts("credited_at"),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    referenceUnique: uniqueIndex("payouts_reference_unique").on(t.reference),
-    userIdIdx: index("payouts_user_id_idx").on(t.userId),
-    walletIdIdx: index("payouts_wallet_id_idx").on(t.walletId),
-    statusIdx: index("payouts_status_idx").on(t.status),
-    createdAtIdx: index("payouts_created_at_idx").on(t.createdAt),
-  }),
-);
+export const providerTokens = app.table("provider_tokens", {
+  provider: text("provider").primaryKey(),
+  token: text("token").notNull(),
+  expiresAt: ts("expires_at"),
+  mintedAt: ts("minted_at").notNull().defaultNow(),
+  lockUntil: ts("lock_until"),
+});
 
-export const userVerifications = pgTable(
-  "user_verifications",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
+export const providerEvents = app.table("provider_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  provider: text("provider").notNull(),
+  eventId: text("event_id").notNull(),
+  eventType: text("event_type").notNull(),
+  reference: text("reference"),
+  payload: jsonb("payload").notNull(),
+  status: text("status").notNull().default("received"),
+  attempts: integer("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  receivedAt: ts("received_at").notNull().defaultNow(),
+  processedAt: ts("processed_at"),
+});
 
-    bvn: text("bvn"),
-    bvnSuffix: text("bvn_suffix"),
-    bvnStatus: text("bvn_status").notNull().default("PENDING"),
-    bvnVerifiedAt: timestamp("bvn_verified_at", { withTimezone: true }),
-    bvnProviderReference: text("bvn_provider_reference"),
-    bvnFailureReason: text("bvn_failure_reason"),
+export const vtuOrders = app.table("vtu_orders", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  walletId: uuid("wallet_id").notNull(),
+  reference: text("reference").notNull(),
+  product: text("product").notNull(), // airtime | data | cable | electricity | intl_airtime
+  provider: text("provider").notNull(), // peyflex | reloadly
+  service: text("service").notNull(),
+  planCode: text("plan_code"),
+  planName: text("plan_name"),
+  recipient: text("recipient").notNull(),
+  recipientName: text("recipient_name"),
+  meterType: text("meter_type"),
+  amount: money("amount").notNull(),
+  fee: money("fee").notNull().default("0"),
+  status: text("status").notNull().default("pending"), // pending | processing | success | failed | refunded | unknown
+  providerReference: text("provider_reference"),
+  token: text("token"),
+  units: text("units"),
+  providerResponse: jsonb("provider_response"),
+  lastError: text("last_error"),
+  attempts: integer("attempts").notNull().default(0),
+  nextCheckAt: ts("next_check_at"),
+  debitEntryId: uuid("debit_entry_id"),
+  refundEntryId: uuid("refund_entry_id"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+  completedAt: ts("completed_at"),
+});
 
-    nin: text("nin"),
-    ninSuffix: text("nin_suffix"),
-    ninStatus: text("nin_status").notNull().default("PENDING"),
-    ninVerifiedAt: timestamp("nin_verified_at", { withTimezone: true }),
-    ninProviderReference: text("nin_provider_reference"),
-    ninFailureReason: text("nin_failure_reason"),
+export const beneficiaries = app.table("beneficiaries", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  bankCode: text("bank_code").notNull(),
+  bankName: text("bank_name").notNull(),
+  accountNumber: text("account_number").notNull(),
+  accountName: text("account_name").notNull(),
+  nickname: text("nickname"),
+  lastUsedAt: ts("last_used_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
 
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    userUnique: uniqueIndex("user_verifications_user_unique").on(t.userId),
-    userIdIdx: index("user_verifications_user_id_idx").on(t.userId),
-    bvnStatusIdx: index("user_verifications_bvn_status_idx").on(t.bvnStatus),
-    ninStatusIdx: index("user_verifications_nin_status_idx").on(t.ninStatus),
-  }),
-);
+export const payouts = app.table("payouts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  walletId: uuid("wallet_id").notNull(),
+  reference: text("reference").notNull(),
+  amount: money("amount").notNull(),
+  fee: money("fee").notNull().default("0"),
+  beneficiaryBankCode: text("beneficiary_bank_code").notNull(),
+  beneficiaryBankRef: text("beneficiary_bank_ref"),
+  beneficiaryBankName: text("beneficiary_bank_name"),
+  beneficiaryAccountNumber: text("beneficiary_account_number").notNull(),
+  beneficiaryAccountName: text("beneficiary_account_name").notNull(),
+  narration: text("narration").notNull(),
+  provider: text("provider").notNull(),
+  providerReference: text("provider_reference"),
+  status: text("status").notNull().default("pending"), // pending | processing | success | failed | reversed | unknown
+  lastError: text("last_error"),
+  attempts: integer("attempts").notNull().default(0),
+  nextCheckAt: ts("next_check_at"),
+  debitEntryId: uuid("debit_entry_id"),
+  reversalEntryId: uuid("reversal_entry_id"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+  completedAt: ts("completed_at"),
+});
 
-export const accountUpdateRequests = pgTable(
-  "account_update_requests",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    requestedFields: jsonb("requested_fields").notNull(),
-    status: text("status").notNull().default("pending"),
-    adminNote: text("admin_note"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    userIdIdx: index("account_update_requests_user_id_idx").on(t.userId),
-    statusIdx: index("account_update_requests_status_idx").on(t.status),
-    createdAtIdx: index("account_update_requests_created_at_idx").on(
-      t.createdAt,
-    ),
-  }),
-);
+export const supportTickets = app.table("support_tickets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  subject: text("subject").notNull(),
+  status: text("status").notNull().default("open"),
+  relatedType: text("related_type"),
+  relatedId: uuid("related_id"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-export const supportTickets = pgTable(
-  "support_tickets",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    subject: text("subject").notNull(),
-    message: text("message").notNull(),
-    status: text("status").notNull().default("open"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    userIdIdx: index("support_tickets_user_id_idx").on(t.userId),
-    statusIdx: index("support_tickets_status_idx").on(t.status),
-    createdAtIdx: index("support_tickets_created_at_idx").on(t.createdAt),
-  }),
-);
+export const supportMessages = app.table("support_messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ticketId: uuid("ticket_id").notNull(),
+  authorId: uuid("author_id").notNull(),
+  body: text("body").notNull(),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
 
-export const users = pgTable(
-  "users",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    firstName: text("first_name").notNull(),
-    lastName: text("last_name").notNull(),
-    email: text("email"),
-    phone: text("phone"),
-    passwordHash: text("password_hash").notNull(),
-    // 6-digit mobile app passcode (hashed); nullable for existing users
-    passcodeHash: text("passcode_hash"),
-    // 4-digit transaction pin (hashed); nullable for existing users
-    transactionPinHash: text("transaction_pin_hash"),
-    countryCode: text("country_code")
-      .notNull()
-      .references(() => countries.code, { onDelete: "restrict" }),
-    region: text("region"),
-    currencyCode: text("currency_code").notNull(),
-    preferredCurrency: text("preferred_currency"),
-    complianceRegion: text("compliance_region"),
-    dataLocalizationRegion: text("data_localization_region"),
-    complianceTier: text("compliance_tier"),
-    role: text("role").notNull().default("customer"),
-    status: text("status").notNull().default("active"),
-    telecomReloadlyEnabled: boolean("telecom_reloadly_enabled")
-      .notNull()
-      .default(false),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    emailUnique: uniqueIndex("users_email_unique").on(t.email),
-    phoneUnique: uniqueIndex("users_phone_unique").on(t.phone),
-    roleIdx: index("users_role_idx").on(t.role),
-    countryIdx: index("users_country_code_idx").on(t.countryCode),
-    statusIdx: index("users_status_idx").on(t.status),
-  }),
-);
+export const accountUpdateRequests = app.table("account_update_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  requestedFields: jsonb("requested_fields").notNull(),
+  status: text("status").notNull().default("pending"),
+  reviewedBy: uuid("reviewed_by"),
+  adminNote: text("admin_note"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-export const sessions = pgTable(
-  "sessions",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    refreshTokenHash: text("refresh_token_hash").notNull(),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    sessionType: text("session_type").notNull().default("customer"),
-    deviceId: text("device_id"),
-    revoked: boolean("revoked").notNull().default(false),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => ({
-    userIdIdx: index("sessions_user_id_idx").on(t.userId),
-    typeIdx: index("sessions_type_idx").on(t.sessionType),
-    deviceIdIdx: index("sessions_device_id_idx").on(t.deviceId),
-    revokedIdx: index("sessions_revoked_idx").on(t.revoked),
-  }),
-);
+export const complianceFlags = app.table("compliance_flags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  subjectType: text("subject_type").notNull(), // user | deposit | vtu_order | payout
+  subjectId: uuid("subject_id").notNull(),
+  ruleCode: text("rule_code").notNull(),
+  status: text("status").notNull().default("open"),
+  metadata: jsonb("metadata"),
+  reviewedBy: uuid("reviewed_by"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
 
-export const wallets = pgTable(
-  "wallets",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    currencyCode: text("currency_code").notNull(),
-    availableBalance: numeric("available_balance", { precision: 20, scale: 8 })
-      .notNull()
-      .default("0"),
-    lockedBalance: numeric("locked_balance", { precision: 20, scale: 8 })
-      .notNull()
-      .default("0"),
-    status: text("status").notNull().default("active"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    userIdIdx: index("wallets_user_id_idx").on(t.userId),
-    userCurrencyUnique: uniqueIndex("wallets_user_currency_unique").on(
-      t.userId,
-      t.currencyCode,
-    ),
-  }),
-);
+export const auditLog = app.table("audit_log", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  actorUserId: uuid("actor_user_id"),
+  actorRole: text("actor_role"),
+  action: text("action").notNull(),
+  targetType: text("target_type"),
+  targetId: text("target_id"),
+  success: boolean("success").notNull().default(true),
+  reason: text("reason"),
+  before: jsonb("before"),
+  after: jsonb("after"),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  requestId: text("request_id"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
 
-export const walletLedger = pgTable(
-  "wallet_ledger",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    walletId: uuid("wallet_id")
-      .notNull()
-      .references(() => wallets.id, { onDelete: "cascade" }),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    currencyCode: text("currency_code").notNull(),
-    transactionType: text("transaction_type").notNull(),
-    direction: text("direction").notNull(),
-    amount: numeric("amount", { precision: 20, scale: 8 }).notNull(),
-    balanceBefore: numeric("balance_before", {
-      precision: 20,
-      scale: 8,
-    }).notNull(),
-    balanceAfter: numeric("balance_after", {
-      precision: 20,
-      scale: 8,
-    }).notNull(),
-    referenceCode: text("reference_code").notNull(),
-    relatedOrderId: text("related_order_id"),
-    description: text("description").notNull(),
-    status: text("status").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => ({
-    walletIdIdx: index("wallet_ledger_wallet_id_idx").on(t.walletId),
-    userIdIdx: index("wallet_ledger_user_id_idx").on(t.userId),
-    referenceUnique: uniqueIndex("wallet_ledger_reference_unique").on(
-      t.referenceCode,
-    ),
-    createdAtIdx: index("wallet_ledger_created_at_idx").on(t.createdAt),
-  }),
-);
-
-export const webhookEvents = pgTable(
-  "webhook_events",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    provider: text("provider").notNull(),
-    eventType: text("event_type").notNull(),
-    reference: text("reference").notNull(),
-    payload: jsonb("payload").notNull(),
-    status: text("status").notNull().default("received"),
-    retryCount: numeric("retry_count", { precision: 10, scale: 0 })
-      .notNull()
-      .default("0"),
-    processedAt: timestamp("processed_at", { withTimezone: true }),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => ({
-    providerRefUnique: uniqueIndex("webhook_events_provider_ref_unique").on(
-      t.provider,
-      t.reference,
-      t.eventType,
-    ),
-    statusIdx: index("webhook_events_status_idx").on(t.status),
-    createdAtIdx: index("webhook_events_created_at_idx").on(t.createdAt),
-  }),
-);
-
-export const complianceFlags = pgTable(
-  "compliance_flags",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    walletLedgerId: uuid("wallet_ledger_id")
-      .notNull()
-      .references(() => walletLedger.id, { onDelete: "cascade" }),
-    complianceRegion: text("compliance_region").notNull(),
-    ruleCode: text("rule_code").notNull(),
-    status: text("status").notNull().default("flagged"),
-    metadata: jsonb("metadata"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (t) => ({
-    userIdIdx: index("compliance_flags_user_id_idx").on(t.userId),
-    ledgerIdUnique: uniqueIndex("compliance_flags_ledger_id_unique").on(
-      t.walletLedgerId,
-      t.ruleCode,
-    ),
-  }),
-);
-
-export const transactionLimits = pgTable(
-  "transaction_limits",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    complianceRegion: text("compliance_region").notNull(),
-    complianceTier: text("compliance_tier").notNull(),
-    currencyCode: text("currency_code").notNull(),
-    dailyLimit: numeric("daily_limit", { precision: 20, scale: 8 }).notNull(),
-    monthlyLimit: numeric("monthly_limit", {
-      precision: 20,
-      scale: 8,
-    }).notNull(),
-    transactionLimit: numeric("transaction_limit", {
-      precision: 20,
-      scale: 8,
-    }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    regionTierUnique: uniqueIndex("transaction_limits_region_tier_unique").on(
-      t.complianceRegion,
-      t.complianceTier,
-      t.currencyCode,
-    ),
-  }),
-);
-
-export const monnifyReservedAccounts = pgTable(
-  "monnify_reserved_accounts",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    walletId: uuid("wallet_id")
-      .notNull()
-      .references(() => wallets.id, { onDelete: "cascade" }),
-    accountReference: text("account_reference").notNull(),
-    reservationReference: text("reservation_reference"),
-    status: text("status"),
-    bankCode: text("bank_code"),
-    bankName: text("bank_name"),
-    accountNumber: text("account_number"),
-    accountName: text("account_name"),
-    rawResponse: jsonb("raw_response"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    userIdIdx: index("monnify_reserved_accounts_user_id_idx").on(t.userId),
-    walletIdUnique: uniqueIndex(
-      "monnify_reserved_accounts_wallet_id_unique",
-    ).on(t.walletId),
-    accountReferenceUnique: uniqueIndex(
-      "monnify_reserved_accounts_account_reference_unique",
-    ).on(t.accountReference),
-  }),
-);
-
-export const telecomTransactions = pgTable(
-  "telecom_transactions",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    walletId: uuid("wallet_id")
-      .notNull()
-      .references(() => wallets.id, { onDelete: "cascade" }),
-
-    internalReference: text("internal_reference").notNull(),
-
-    provider: text("provider").notNull(),
-    providerReference: text("provider_reference"),
-
-    productType: text("product_type").notNull(),
-    network: text("network").notNull(),
-    mobileNumber: text("mobile_number").notNull(),
-    planCode: text("plan_code"),
-
-    amount: numeric("amount", { precision: 20, scale: 8 }).notNull(),
-    status: text("status").notNull(),
-
-    requestPayload: jsonb("request_payload"),
-    providerResponse: jsonb("provider_response"),
-    lastError: text("last_error"),
-
-    attempts: numeric("attempts", { precision: 10, scale: 0 })
-      .notNull()
-      .default("0"),
-    nextRetryAt: timestamp("next_retry_at", { withTimezone: true }),
-
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    internalReferenceUnique: uniqueIndex(
-      "telecom_transactions_internal_reference_unique",
-    ).on(t.internalReference),
-    userIdIdx: index("telecom_transactions_user_id_idx").on(t.userId),
-    walletIdIdx: index("telecom_transactions_wallet_id_idx").on(t.walletId),
-    statusIdx: index("telecom_transactions_status_idx").on(t.status),
-    nextRetryAtIdx: index("telecom_transactions_next_retry_at_idx").on(
-      t.nextRetryAt,
-    ),
-  }),
-);
-
-export const trainingRegistrations = pgTable(
-  "training_registrations",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    fullName: text("full_name").notNull(),
-    email: text("email").notNull(),
-    phone: text("phone").notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true })
-      .notNull()
-      .defaultNow()
-      .$onUpdate(() => new Date()),
-  },
-  (t) => ({
-    emailPhoneUnique: uniqueIndex(
-      "training_registrations_email_phone_unique",
-    ).on(t.email, t.phone),
-    createdAtIdx: index("training_registrations_created_at_idx").on(
-      t.createdAt,
-    ),
-  }),
-);
+export const trainingRegistrations = app.table("training_registrations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull(),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});

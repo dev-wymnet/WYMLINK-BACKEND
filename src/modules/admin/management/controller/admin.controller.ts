@@ -63,7 +63,6 @@ export const createAdminHandler: RequestHandler = async (req, res, next) => {
       firstName: dto.firstName,
       lastName: dto.lastName,
       email: dto.email,
-      countryCode: dto.countryCode,
       role: dto.role,
       temporaryPassword: dto.temporaryPassword,
       ...(dto.phone ? { phone: dto.phone } : {}),
