@@ -57,9 +57,11 @@ export async function openVirtualAccount(input: { userId: string; bvn: string; n
   }
 
   // One opening at a time per customer (Moneta allows one account per BVN).
-  return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"va:" + user.id}))`);
-    const again = await findActiveVirtualAccount(wallet.id, tx);
+  if (!(await claimOpening(user.id))) {
+    throw new ValidationError("Your account number is already being set up. Check again in a minute.");
+  }
+  try {
+    const again = await findActiveVirtualAccount(wallet.id);
     if (again) return again;
 
     const created = await createVirtualAccount({ firstName: user.firstName, surname: user.lastName, bvn: input.bvn, nin: input.nin });
@@ -67,7 +69,7 @@ export async function openVirtualAccount(input: { userId: string; bvn: string; n
       logger.warn({ userId: user.id, message: created.message }, "moneta_va_create_failed");
       throw new ValidationError(`We couldn't open your account: ${created.message}`);
     }
-    const [va] = await tx
+    const [va] = await db
       .insert(virtualAccounts)
       .values({
         userId: user.id,
@@ -82,7 +84,31 @@ export async function openVirtualAccount(input: { userId: string; bvn: string; n
       .returning();
     logger.info({ userId: user.id }, "moneta_va_opened");
     return va!;
-  });
+  } finally {
+    await releaseOpening(user.id).catch(() => undefined);
+  }
+}
+
+// The per-customer opening lock is a short lease row in app.provider_tokens (the same
+// claim pattern as the shared Moneta token), not a database transaction: the Moneta call
+// can take a minute, and holding a pooled connection that long — while the token lookup
+// needs a second one — let a handful of simultaneous openings exhaust the pool.
+// The lease outlives the slowest Moneta call, so a crashed request frees it by itself.
+const OPEN_LEASE_SECONDS = 300;
+const openingKey = (userId: string) => `va-open:${userId}`;
+
+async function claimOpening(userId: string) {
+  const res = await db.execute(sql`
+    insert into app.provider_tokens (provider, token, lock_until)
+    values (${openingKey(userId)}, '', now() + make_interval(secs => ${OPEN_LEASE_SECONDS}))
+    on conflict (provider) do update set lock_until = excluded.lock_until
+      where app.provider_tokens.lock_until is null or app.provider_tokens.lock_until < now()
+    returning provider`);
+  return res.rows.length === 1;
+}
+
+async function releaseOpening(userId: string) {
+  await db.execute(sql`delete from app.provider_tokens where provider = ${openingKey(userId)}`);
 }
 
 // Records one Moneta credit and credits the wallet with the settled amount, in one
