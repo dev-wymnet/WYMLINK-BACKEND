@@ -7,6 +7,7 @@ import { db } from "../../../core/db/client.js";
 import { otpCodes } from "../../../core/db/schema.js";
 import { InvalidCodeError } from "../../../core/errors/AppError.js";
 import { ValidationError } from "../../../core/errors/ValidationError.js";
+import { logger } from "../../../core/logger/logger.js";
 
 export type OtpPurpose =
   | "verify_email"
@@ -48,6 +49,17 @@ export async function issueOtp(userId: string, purpose: OtpPurpose) {
     expiresAt: new Date(Date.now() + env.OTP_TTL_SECONDS * 1000),
   });
   return { code, minutes: Math.floor(env.OTP_TTL_SECONDS / 60) };
+}
+
+// Runs a "send a code" step without letting its failure reach the caller. The forgot
+// password/PIN endpoints must answer identically whether or not the account exists, so
+// "wait a minute before another code" and mail errors can't reveal that it does.
+export async function quietly(userId: string, purpose: OtpPurpose, fn: () => Promise<void>) {
+  try {
+    await fn();
+  } catch (err) {
+    logger.warn({ userId, purpose, err: (err as Error).message }, "otp_send_suppressed");
+  }
 }
 
 // Checks and burns a code. Each code allows OTP_MAX_ATTEMPTS guesses.

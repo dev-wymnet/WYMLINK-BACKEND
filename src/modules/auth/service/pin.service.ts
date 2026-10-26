@@ -4,10 +4,11 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../../../core/db/client.js";
 import { pinAttempts, users } from "../../../core/db/schema.js";
 import { ValidationError } from "../../../core/errors/ValidationError.js";
-import { UnauthorizedError } from "../../../core/errors/UnauthorizedError.js";
 import {
   InvalidCodeError,
+  InvalidPasscodeError,
   InvalidTransactionPinError,
+  PasscodeLockedError,
   TransactionPinAlreadySetError,
   TransactionPinLockedError,
   TransactionPinNotSetError,
@@ -15,7 +16,7 @@ import {
 import { env } from "../../../core/config/env.js";
 import { sendEmail } from "../../../core/email/mailer.js";
 import { findUserByEmailOrPhone } from "../../user/repository/user.repository.js";
-import { consumeOtp, issueOtp } from "./otp.service.js";
+import { consumeOtp, issueOtp, quietly } from "./otp.service.js";
 
 type PinKind = "transaction_pin" | "passcode";
 
@@ -41,7 +42,7 @@ async function ensureNotLocked(userId: string, kind: PinKind) {
   const until = await lockedUntil(userId, kind);
   if (!until) return;
   if (kind === "transaction_pin") throw new TransactionPinLockedError(until);
-  throw new UnauthorizedError("Too many attempts. Try again later.");
+  throw new PasscodeLockedError(until);
 }
 
 // One atomic upsert: the count can't be raced past the limit.
@@ -128,12 +129,15 @@ export async function changeTransactionPin(input: { userId: string; currentPin: 
 export async function requestTransactionPinReset(input: { email: string }) {
   const user = await findUserByEmailOrPhone({ email: input.email });
   if (!user?.email) return;
-  const { code, minutes } = await issueOtp(user.id, "reset_transaction_pin");
-  await sendEmail({
-    to: user.email,
-    subject: "Your Wymlink PIN reset code",
-    text: `Use this code to reset your Wymlink transaction PIN: ${code}. It expires in ${minutes} minutes. If you didn't ask for this, ignore this email and your PIN stays the same.`,
-    html: `<p>Use this code to reset your Wymlink transaction PIN:</p><h2 style="letter-spacing:4px">${code}</h2><p>It expires in ${minutes} minutes.</p><p>If you didn't ask for this, ignore this email — your PIN stays the same.</p>`,
+  const { id, email } = user;
+  await quietly(id, "reset_transaction_pin", async () => {
+    const { code, minutes } = await issueOtp(id, "reset_transaction_pin");
+    await sendEmail({
+      to: email,
+      subject: "Your Wymlink PIN reset code",
+      text: `Use this code to reset your Wymlink transaction PIN: ${code}. It expires in ${minutes} minutes. If you didn't ask for this, ignore this email and your PIN stays the same.`,
+      html: `<p>Use this code to reset your Wymlink transaction PIN:</p><h2 style="letter-spacing:4px">${code}</h2><p>It expires in ${minutes} minutes.</p><p>If you didn't ask for this, ignore this email — your PIN stays the same.</p>`,
+    });
   });
 }
 
@@ -162,10 +166,10 @@ export async function verifyPasscode(input: { userId: string; passcode: string }
   if (!PASSCODE_RE.test(input.passcode)) throw new ValidationError("Invalid passcode format");
   await ensureNotLocked(input.userId, "passcode");
   const { passcode } = await readHashes(input.userId);
-  if (!passcode) throw new UnauthorizedError("Invalid credentials");
+  if (!passcode) throw new InvalidPasscodeError("Set up your passcode first");
   if (!(await bcrypt.compare(input.passcode, passcode))) {
     await registerFailure(input.userId, "passcode");
-    throw new UnauthorizedError("Invalid credentials");
+    throw new InvalidPasscodeError();
   }
   await clearFailures(input.userId, "passcode");
 }

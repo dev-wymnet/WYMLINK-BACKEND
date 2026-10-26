@@ -34,6 +34,13 @@ const envSchema = z.object({
     .positive()
     .default(60 * 60 * 24),
 
+  // Mobile app sessions (passcode-locked on the device). Default 30 days.
+  MOBILE_REFRESH_TOKEN_TTL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(60 * 60 * 24 * 30),
+
   // Providers below are optional at boot: a feature whose provider is not
   // configured answers "not available yet" when used.
 

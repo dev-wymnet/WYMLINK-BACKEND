@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } from 
 
 import { db } from "../../../../core/db/client.js";
 import { users, vtuOrders } from "../../../../core/db/schema.js";
+import { OPEN_ORDER_STATUSES } from "../../../vtu/vtu.service.js";
 import type { ListBillsDto } from "../types/bills.dto.js";
 
 const escapeLike = (s: string) => s.replace(/[%_\\]/g, (ch) => "\\" + ch);
@@ -11,7 +12,7 @@ function where(f: ListBillsDto) {
   if (f.from) c.push(gte(vtuOrders.createdAt, new Date(f.from)));
   if (f.to) c.push(lte(vtuOrders.createdAt, new Date(f.to)));
   if (f.customerId) c.push(eq(vtuOrders.userId, f.customerId));
-  if (f.status === "attention") c.push(inArray(vtuOrders.status, ["unknown", "processing", "pending"]));
+  if (f.status === "attention") c.push(inArray(vtuOrders.status, OPEN_ORDER_STATUSES));
   else if (f.status) c.push(eq(vtuOrders.status, f.status));
   if (f.type) c.push(eq(vtuOrders.product, f.type));
   if (f.provider) c.push(eq(vtuOrders.provider, f.provider));

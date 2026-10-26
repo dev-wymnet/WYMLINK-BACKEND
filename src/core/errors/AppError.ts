@@ -69,6 +69,22 @@ export class TransactionPinLockedError extends AppError {
   }
 }
 
+// The mobile app tells these apart from an expired session (plain UNAUTHORIZED),
+// which must sign the user out; a wrong passcode must not.
+export class InvalidPasscodeError extends AppError {
+  constructor(message = "Invalid credentials") {
+    super(message, { statusCode: 401, code: "INVALID_PASSCODE" });
+    this.name = "InvalidPasscodeError";
+  }
+}
+
+export class PasscodeLockedError extends AppError {
+  constructor(lockedUntil: Date, message = "Too many wrong passcode attempts. Try again later.") {
+    super(message, { statusCode: 429, code: "PASSCODE_LOCKED", details: { lockedUntil: lockedUntil.toISOString() } });
+    this.name = "PasscodeLockedError";
+  }
+}
+
 export class InvalidCodeError extends AppError {
   constructor(message = "That code is invalid or has expired") {
     super(message, { statusCode: 400, code: "INVALID_CODE" });

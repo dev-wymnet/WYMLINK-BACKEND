@@ -29,7 +29,7 @@ import {
   type SessionKind,
 } from "../repository/session.repository.js";
 import { getOrCreateWallet } from "../../wallet/repository/wallet.repository.js";
-import { consumeOtp, issueOtp } from "./otp.service.js";
+import { consumeOtp, issueOtp, quietly } from "./otp.service.js";
 
 // bcrypt hash of a random throwaway string, used to equalise login timing.
 const DUMMY_HASH = bcrypt.hashSync(randomToken(16), 12);
@@ -114,10 +114,12 @@ export async function issueTokens(
   ctx: ClientContext & { kind?: SessionKind; refreshTtlSeconds?: number } = {},
 ) {
   const rawRefreshToken = randomToken(32);
-  const refreshTtl = ctx.refreshTtlSeconds ?? env.REFRESH_TOKEN_TTL_SECONDS;
+  const kind = ctx.kind ?? (ctx.client === "mobile" ? "mobile" : "web");
+  // Phones keep a longer session: the app asks for its passcode on every open.
+  const refreshTtl = ctx.refreshTtlSeconds ?? (kind === "mobile" ? env.MOBILE_REFRESH_TOKEN_TTL_SECONDS : env.REFRESH_TOKEN_TTL_SECONDS);
   const session = await createSession({
     userId: input.userId,
-    kind: ctx.kind ?? (ctx.client === "mobile" ? "mobile" : "web"),
+    kind,
     refreshTokenHash: sha256Base64Url(rawRefreshToken),
     expiresAt: new Date(Date.now() + refreshTtl * 1000),
     deviceId: ctx.deviceId ?? null,
@@ -178,12 +180,15 @@ export async function logout(input: { refreshToken: string }) {
 export async function requestPasswordReset(input: { email: string }) {
   const user = await findUserByEmailOrPhone({ email: input.email });
   if (!user?.email || user.role !== "customer") return;
-  const { code, minutes } = await issueOtp(user.id, "reset_password");
-  await sendEmail({
-    to: user.email,
-    subject: "Your Wymlink password reset code",
-    text: `Use this code to reset your password: ${code}. It expires in ${minutes} minutes.`,
-    html: `<p>Use this code to reset your password:</p><h2 style="letter-spacing:4px">${code}</h2><p>This code expires in ${minutes} minutes.</p>`,
+  const { id, email } = user;
+  await quietly(id, "reset_password", async () => {
+    const { code, minutes } = await issueOtp(id, "reset_password");
+    await sendEmail({
+      to: email,
+      subject: "Your Wymlink password reset code",
+      text: `Use this code to reset your password: ${code}. It expires in ${minutes} minutes.`,
+      html: `<p>Use this code to reset your password:</p><h2 style="letter-spacing:4px">${code}</h2><p>This code expires in ${minutes} minutes.</p>`,
+    });
   });
 }
 

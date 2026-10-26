@@ -2,6 +2,7 @@ import type { RequestHandler } from "express";
 
 import { ValidationError } from "../../../core/errors/ValidationError.js";
 import { sendEmail } from "../../../core/email/email.service.js";
+import { escapeHtml } from "../../../core/email/mailer.js";
 import {
   createTrainingRegistration,
   findTrainingRegistrationByEmailOrPhone,
@@ -23,10 +24,11 @@ export const registerTrainingHandler: RequestHandler = async (
     if (
       !fullName ||
       typeof fullName !== "string" ||
-      fullName.trim().length < 3
+      fullName.trim().length < 3 ||
+      fullName.trim().length > 100
     ) {
       throw new ValidationError(
-        "fullName is required and must be at least 3 characters",
+        "Enter your full name (3 to 100 characters)",
       );
     }
 
@@ -73,7 +75,7 @@ export const registerTrainingHandler: RequestHandler = async (
         `Next step: Please take a screenshot of your registration confirmation page together with your payment receipt and send both to the Wymnet support team for payment confirmation.\n\n` +
         `Thank you,\nWymnet Team`,
       html:
-        `<p>Hi ${fullName.trim()},</p>` +
+        `<p>Hi ${escapeHtml(fullName.trim())},</p>` +
         `<p>Your registration for the <strong>AI Workflow Automation</strong> training has been received.</p>` +
         `<p><strong>Date:</strong> 5 – 12 September<br/>` +
         `<strong>Location:</strong> Novare Mall, Wuse, Abuja (Hybrid - Physical + Online)<br/>` +

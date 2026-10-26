@@ -2,6 +2,7 @@ import { and, desc, eq, gte, inArray, lte, sql, type SQL } from "drizzle-orm";
 
 import { db } from "../../../../core/db/client.js";
 import { kycProfiles, users, vtuOrders, walletLedger } from "../../../../core/db/schema.js";
+import { OPEN_ORDER_STATUSES } from "../../../vtu/vtu.service.js";
 
 const lagosMidnight = sql`(date_trunc('day', now() at time zone 'Africa/Lagos') at time zone 'Africa/Lagos')`;
 
@@ -53,7 +54,7 @@ export async function getAdminHomeSummary(input: { from?: Date | undefined; to?:
       })
       .from(users)
       .where(eq(users.role, "customer")),
-    db.select({ c: sql<number>`count(*)::int` }).from(vtuOrders).where(inArray(vtuOrders.status, ["unknown", "processing", "pending"])),
+    db.select({ c: sql<number>`count(*)::int` }).from(vtuOrders).where(inArray(vtuOrders.status, OPEN_ORDER_STATUSES)),
     db
       .select({ c: sql<number>`count(*)::int` })
       .from(kycProfiles)

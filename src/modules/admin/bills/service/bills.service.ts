@@ -1,10 +1,8 @@
 import { NotFoundError } from "../../../../core/errors/NotFoundError.js";
 import { insertAuditLog } from "../../../audit/repository/audit.repository.js";
-import { resolveOrder } from "../../../vtu/vtu.service.js";
+import { OPEN_ORDER_STATUSES as OPEN, resolveOrder } from "../../../vtu/vtu.service.js";
 import type { ListBillsDto } from "../types/bills.dto.js";
 import { countBills, getBillById, listBills } from "../repository/bills.repository.js";
-
-const OPEN = ["unknown", "processing", "pending"];
 
 export async function listAdminBills(f: ListBillsDto) {
   const [rows, total] = await Promise.all([listBills(f), countBills(f)]);

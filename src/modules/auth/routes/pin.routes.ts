@@ -14,8 +14,11 @@ import {
 
 export const pinRoutes = Router();
 
-// Brute-force protection on everything that checks or replaces a secret (per IP).
-const pinLimiter = limiter({ windowMs: 15 * 60 * 1000, max: 20 });
+// Brute-force protection on everything that checks or replaces a secret. Signed-in
+// routes count per user (customers on one carrier IP must not lock each other out);
+// the lockout in pin.service still caps wrong guesses per account.
+const pinLimiter = limiter({ windowMs: 15 * 60 * 1000, max: 20, by: "user" });
+const resetLimiter = limiter({ windowMs: 15 * 60 * 1000, max: 10, by: "ip+identity" });
 
 pinRoutes.get("/status", authGuard, pinStatusHandler);
 
@@ -27,5 +30,5 @@ pinRoutes.post("/passcode/verify", authGuard, pinLimiter, verifyPasscodeHandler)
 pinRoutes.post("/passcode/change", authGuard, pinLimiter, changePasscodeHandler);
 
 // Public endpoints for requesting and completing OTP-based reset
-pinRoutes.post("/transaction/reset/request", pinLimiter, requestTxPinResetHandler);
-pinRoutes.post("/transaction/reset/confirm", pinLimiter, resetTxPinWithOtpHandler);
+pinRoutes.post("/transaction/reset/request", resetLimiter, requestTxPinResetHandler);
+pinRoutes.post("/transaction/reset/confirm", resetLimiter, resetTxPinWithOtpHandler);

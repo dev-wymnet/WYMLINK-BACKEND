@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import { db } from "../../core/db/client.js";
 import { vtuOrders } from "../../core/db/schema.js";
@@ -88,8 +88,11 @@ export async function placeOrder(spec: OrderSpec, send: () => Promise<ProviderOu
   let order: VtuOrder;
   try {
     order = await db.transaction(async (tx) => {
-      await enforceSpendLimit(tx, { userId: spec.userId, amountCents: spec.amountCents });
+      // Lock the wallet before checking limits: concurrent purchases by one user queue
+      // here, so each limit check sees the debits committed before it.
       const wallet = await getOrCreateWallet(spec.userId, tx);
+      await tx.execute(sql`select 1 from app.wallets where id = ${wallet.id}::uuid for update`);
+      await enforceSpendLimit(tx, { userId: spec.userId, amountCents: spec.amountCents });
       const [created] = await tx
         .insert(vtuOrders)
         .values({
@@ -152,34 +155,41 @@ async function recordOutcome(order: VtuOrder, outcome: ProviderOutcome): Promise
     lastError: outcome.status === "success" ? null : (outcome.message ?? null),
   };
 
-  if (outcome.status === "success") {
-    const [done] = await db
-      .update(vtuOrders)
-      .set({ ...common, status: "success", token: outcome.token ?? null, units: outcome.units ?? null, completedAt: new Date(), nextCheckAt: null })
-      .where(eq(vtuOrders.id, order.id))
-      .returning();
-    logger.info({ orderId: order.id, product: order.product }, "vtu_order_success");
-    return done!;
-  }
-
   if (outcome.status === "failed") {
-    await db.update(vtuOrders).set({ ...common, status: "failed" }).where(eq(vtuOrders.id, order.id));
-    const refunded = await refundOrder(order.id, `${LABEL[order.product as Product]} purchase failed — refunded`);
+    // Recorded and refunded in one transaction: a crash can't leave a failed, unrefunded order.
+    const refunded = await refundOrder(order.id, `${LABEL[order.product as Product]} purchase failed — refunded`, common);
     logger.info({ orderId: order.id, product: order.product }, "vtu_order_failed_refunded");
     return refunded;
   }
 
-  const [held] = await db
+  const update =
+    outcome.status === "success"
+      ? { ...common, status: "success", token: outcome.token ?? null, units: outcome.units ?? null, completedAt: new Date(), nextCheckAt: null }
+      : { ...common, status: "unknown", nextCheckAt: new Date(Date.now() + 10 * 60_000) };
+  // Only an order still in flight takes the provider's answer: it never overwrites a
+  // decision staff already made (e.g. a refund).
+  const [done] = await db
     .update(vtuOrders)
-    .set({ ...common, status: "unknown", nextCheckAt: new Date(Date.now() + 10 * 60_000) })
-    .where(eq(vtuOrders.id, order.id))
+    .set(update)
+    .where(and(eq(vtuOrders.id, order.id), eq(vtuOrders.status, "processing")))
     .returning();
-  logger.warn({ orderId: order.id, product: order.product }, "vtu_order_outcome_unknown");
-  return held!;
+  if (!done) {
+    const current = (await db.select().from(vtuOrders).where(eq(vtuOrders.id, order.id)).limit(1))[0]!;
+    logger.error({ orderId: order.id, outcome: outcome.status, current: current.status }, "vtu_order_outcome_after_resolution");
+    return current;
+  }
+  if (outcome.status === "success") logger.info({ orderId: order.id, product: order.product }, "vtu_order_success");
+  else logger.warn({ orderId: order.id, product: order.product }, "vtu_order_outcome_unknown");
+  return done;
 }
 
 // Credits the order's amount back exactly once (idempotent ledger reference).
-export async function refundOrder(orderId: string, description: string): Promise<VtuOrder> {
+// `outcome` records the provider's answer in the same transaction.
+export async function refundOrder(
+  orderId: string,
+  description: string,
+  outcome: Partial<Pick<VtuOrder, "providerReference" | "providerResponse" | "lastError">> = {},
+): Promise<VtuOrder> {
   return db.transaction(async (tx) => {
     const [o] = await tx.select().from(vtuOrders).where(eq(vtuOrders.id, orderId)).for("update");
     if (!o) throw new NotFoundError("Order not found");
@@ -197,22 +207,33 @@ export async function refundOrder(orderId: string, description: string): Promise
     });
     const [done] = await tx
       .update(vtuOrders)
-      .set({ status: "refunded", refundEntryId: credit.id, completedAt: new Date(), nextCheckAt: null })
+      .set({ ...outcome, status: "refunded", refundEntryId: credit.id, completedAt: new Date(), nextCheckAt: null })
       .where(eq(vtuOrders.id, o.id))
       .returning();
     return done!;
   });
 }
 
+// Orders staff may settle: no clear provider answer, or failed without a refund
+// (only possible for orders written before refunds became atomic).
+export const OPEN_ORDER_STATUSES = ["unknown", "processing", "pending", "failed"];
+
+// A provider call can still be running for a minute after the order is created.
+const IN_FLIGHT_MS = 10 * 60_000;
+
 // Staff resolution of an order whose outcome the provider never confirmed.
 export async function resolveOrder(input: { orderId: string; decision: "delivered" | "refund"; note?: string | undefined }) {
   const rows = await db.select().from(vtuOrders).where(eq(vtuOrders.id, input.orderId)).limit(1);
   const o = rows[0];
   if (!o) throw new NotFoundError("Order not found");
-  if (!["unknown", "processing", "pending"].includes(o.status)) {
+  if (!OPEN_ORDER_STATUSES.includes(o.status)) {
     throw new ValidationError(`This order is already ${o.status}`);
   }
+  if (o.status === "processing" && Date.now() - o.createdAt.getTime() < IN_FLIGHT_MS) {
+    throw new ValidationError("This order is still waiting for the provider. Check again in a few minutes.");
+  }
   if (input.decision === "delivered") {
+    if (o.status === "failed") throw new ValidationError("The provider rejected this order; refund it instead");
     const [done] = await db
       .update(vtuOrders)
       .set({ status: "success", completedAt: new Date(), nextCheckAt: null, lastError: input.note ?? null })
