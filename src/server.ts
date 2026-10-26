@@ -24,6 +24,7 @@ import { dashboardRoutes } from "./modules/dashboard/routes/dashboard.routes.js"
 import { systemRoutes } from "./modules/system/routes/system.routes.js";
 import { trainingRoutes } from "./modules/training/routes/training.routes.js";
 import { payoutRoutes } from "./modules/payout/routes/payout.routes.js";
+import { monetaWebhookRoutes } from "./modules/moneta/moneta.webhook.js";
 import { adminAuthRoutes } from "./modules/admin/auth/routes/adminAuth.routes.js";
 import { adminManagementRoutes } from "./modules/admin/management/routes/admin.routes.js";
 import { adminPaymentsRoutes } from "./modules/admin/payments/routes/payments.routes.js";
@@ -140,6 +141,7 @@ export function createServer(): Express {
   api.use("/system", systemRoutes);
   api.use("/training", trainingRoutes);
   api.use("/payouts", payoutRoutes);
+  api.use("/webhooks", monetaWebhookRoutes);
 
   const admin = Router();
   admin.use("/auth", adminAuthRoutes);

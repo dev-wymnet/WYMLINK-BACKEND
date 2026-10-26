@@ -18,7 +18,15 @@ export class MonetaError extends Error {
 
 export type MonetaResponse = { status: number; json: any };
 
-export async function monetaFetch(url: string, init: RequestInit & { timeoutMs?: number }): Promise<MonetaResponse> {
+// The proxy (Fixie) load-balances across two static IPs, but Moneta whitelists
+// only ONE of them for WymNet. A request that leaves from the other IP is rejected with
+// "Ip address not whitelisted" (responseErrorCode 03) before Moneta processes it,
+// so re-sending it is safe, even for payouts, until it leaves from the right IP.
+const IP_RETRIES = 8;
+const isIpReject = (json: any) =>
+  json?.responseErrorCode === "03" || /not\s*whitelist/i.test(String(json?.message ?? json?.error ?? ""));
+
+async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }): Promise<MonetaResponse> {
   const { timeoutMs: _t, ...rest } = init;
   const res = await fetch(url, {
     ...rest,
@@ -32,6 +40,18 @@ export async function monetaFetch(url: string, init: RequestInit & { timeoutMs?:
     // e.g. a proxy's quota page or an HTML gateway error.
     return { status: res.status, json: { status: false, message: `Unexpected response (${res.status})` } };
   }
+}
+
+export async function monetaFetch(url: string, init: RequestInit & { timeoutMs?: number }): Promise<MonetaResponse> {
+  let r = await fetchOnce(url, init);
+  for (let i = 1; i < IP_RETRIES && isIpReject(r.json); i++) {
+    logger.info({ attempt: i }, "moneta_ip_not_whitelisted_retry");
+    r = await fetchOnce(url, init);
+  }
+  if (isIpReject(r.json)) {
+    throw new MonetaError("Moneta is temporarily unreachable. Please try again shortly.", 503, null);
+  }
+  return r;
 }
 
 export const isMonetaSuccess = (v: unknown) => v === true || v === "success" || v === "true";
