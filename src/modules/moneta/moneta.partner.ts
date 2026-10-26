@@ -80,18 +80,38 @@ const ymd = (d: Date) => d.toISOString().slice(0, 10);
 
 // ---------- Virtual accounts ----------
 
-export async function createVirtualAccount(input: { firstName: string; surname: string; bvn: string; nin: string }) {
+// Moneta's field rules, which its docs don't state (learned by Etico in production):
+// names are letters only, account_name is at most 8 characters, and `nin` takes the
+// documented 10-digit placeholder — the account is opened against the BVN.
+const NIN_PLACEHOLDER = "0000000000";
+const lettersOnly = (s: string) => s.normalize("NFD").replace(/[^A-Za-z]/g, "");
+
+// Moneta's validation refusals carry the reasons per field ({errors: {bvn: ["..."]}}).
+function fieldErrorsOf(r: MonetaResponse) {
+  const e = r.json?.errors ?? (r.json?.status === false ? r.json?.data : null);
+  if (!e || typeof e !== "object" || Array.isArray(e)) return null;
+  const parts = Object.entries(e as Record<string, unknown>)
+    .map(([field, v]) => `${field}: ${(Array.isArray(v) ? v : [v]).map(String).join(", ")}`)
+    .filter((s) => s.length > 2);
+  return parts.length ? parts.join("; ").slice(0, 300) : null;
+}
+
+export async function createVirtualAccount(input: { firstName: string; surname: string; bvn: string }) {
+  const first = lettersOnly(input.firstName) || lettersOnly(input.surname) || "User";
+  const last = lettersOnly(input.surname) || first;
   const r = await call("POST", "/partner/virtual-accounts", {
-    account_name: `${input.firstName} ${input.surname}`.trim(),
+    account_name: first.slice(0, 8),
     account_type: "static",
-    surname: input.surname,
-    first_name: input.firstName,
+    surname: last,
+    first_name: first,
     bvn: input.bvn,
-    nin: input.nin,
+    nin: NIN_PLACEHOLDER,
   });
   const d = r.json?.data ?? {};
   if (!ok(r) || !d.virtual_account_reference || !/^\d{10}$/.test(String(d.account_number ?? ""))) {
-    return { ok: false as const, message: messageOf(r) ?? "Moneta couldn't create the account", raw: r.json };
+    const fields = fieldErrorsOf(r);
+    const message = [messageOf(r), fields].filter(Boolean).join(" — ") || "Moneta couldn't create the account";
+    return { ok: false as const, message, raw: r.json };
   }
   return {
     ok: true as const,

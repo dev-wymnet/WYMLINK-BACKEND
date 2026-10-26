@@ -38,9 +38,10 @@ export async function getMyVirtualAccount(userId: string) {
   return findActiveVirtualAccount(wallet.id);
 }
 
-// Opens the customer's Moneta account. Moneta needs the BVN and NIN in plain digits;
-// Wymlink never stores them, so the customer re-enters both and they must match the
-// numbers staff verified. They are sent to Moneta once and not kept.
+// Opens the customer's Moneta account. Moneta needs the BVN in plain digits; Wymlink
+// never stores it, so the customer re-enters BVN and NIN and both must match the numbers
+// staff verified. The BVN is sent to Moneta once and not kept (Moneta takes a NIN
+// placeholder, see createVirtualAccount).
 export async function openVirtualAccount(input: { userId: string; bvn: string; nin: string }) {
   const user = (await db.select().from(users).where(eq(users.id, input.userId)).limit(1))[0];
   if (!user) throw new NotFoundError("User not found");
@@ -64,7 +65,7 @@ export async function openVirtualAccount(input: { userId: string; bvn: string; n
     const again = await findActiveVirtualAccount(wallet.id);
     if (again) return again;
 
-    const created = await createVirtualAccount({ firstName: user.firstName, surname: user.lastName, bvn: input.bvn, nin: input.nin });
+    const created = await createVirtualAccount({ firstName: user.firstName, surname: user.lastName, bvn: input.bvn });
     if (!created.ok) {
       logger.warn({ userId: user.id, message: created.message }, "moneta_va_create_failed");
       throw new ValidationError(`We couldn't open your account: ${created.message}`);

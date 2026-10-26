@@ -443,6 +443,9 @@ Full API reference (official Postman collection, saved from
   is rejected **before processing** (`"IP address not recognized"` / `responseErrorCode` 03), so `monetaFetch`
   re-sends it, up to 8 times. Fixie IPs are shared with other Fixie customers; long term WymNet gets its own
   server with one dedicated IP.
+- **Create-account field rules** (not in Moneta's docs; Etico learned them in production): `first_name`/`surname`
+  letters only, `account_name` at most 8 characters, `nin` = placeholder `0000000000` (the account opens against the
+  BVN). Anything else gets a bare `"Validation error"`. `createVirtualAccount` applies these.
 - **Fixie free plan: 500 requests / month** (retries count). Don't poll; check on demand.
 - Responses can be slow (Etico measured ~20 s). Timeouts ≥ 60 s; **never blindly retry a money call** except
   on the IP rejection above (provably not processed).
