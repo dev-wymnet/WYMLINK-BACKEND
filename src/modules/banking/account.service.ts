@@ -8,7 +8,7 @@ import { logger } from "../../core/logger/logger.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../core/utils/money.js";
 import { matchesVerifiedIdentity } from "../verification/service/verification.service.js";
 import { findActiveVirtualAccount, getOrCreateWallet, postEntry } from "../wallet/repository/wallet.repository.js";
-import { createVirtualAccount, getVirtualAccountBalance, listCredits, type MonetaCredit } from "../moneta/moneta.partner.js";
+import { createVirtualAccount, listCredits, type MonetaCredit } from "../moneta/moneta.partner.js";
 
 export type VirtualAccount = typeof virtualAccounts.$inferSelect;
 export type Deposit = typeof deposits.$inferSelect;
@@ -173,9 +173,9 @@ async function creditDeposit(tx: Parameters<Parameters<typeof db.transaction>[0]
   return credited!;
 }
 
-// Reads the VA's Moneta history and records any new credits. Called when a payment
-// notification arrives and when the account's Moneta balance changes (on demand, to
-// stay inside the proxy's request quota). Only Moneta's own history is trusted.
+// Reads the VA's Moneta history and records any new credits. Called only when a payment
+// notification arrives (every Moneta call spends the proxy's monthly request quota).
+// Only Moneta's own history is trusted.
 export async function syncDeposits(va: VirtualAccount) {
   const from = new Date(Math.max(va.createdAt.getTime() - 86_400_000, Date.now() - 30 * 86_400_000));
   const credits = await listCredits(va.providerReference, from, new Date(Date.now() + 86_400_000));
@@ -187,48 +187,7 @@ export async function syncDeposits(va: VirtualAccount) {
   return fresh;
 }
 
-// Deposits arrive with Moneta's payment notification (moneta.webhook.ts). As a backup,
-// reading the wallet checks Moneta's balance for the customer's account (at most every
-// 15 minutes per account: every Moneta call spends the proxy's monthly request quota),
-// and only when it has changed is the history read and any new credits recorded. The
-// first check after a restart always reads the history.
-const BALANCE_CHECK_MS = 15 * 60_000;
-const lastCheck = new Map<string, { at: number; balance: number | null; running: Promise<void> | null }>();
-
-export function refreshDepositsFromMoneta(va: VirtualAccount): Promise<void> {
-  const prev = lastCheck.get(va.id);
-  if (prev?.running) return prev.running;
-  if (prev && Date.now() - prev.at < BALANCE_CHECK_MS) return Promise.resolve();
-
-  const state = { at: Date.now(), balance: prev?.balance ?? null, running: null as Promise<void> | null };
-  state.running = (async () => {
-    const balance = await getVirtualAccountBalance(va.providerReference);
-    if (balance === null || balance === state.balance) return;
-    const fresh = await syncDeposits(va);
-    state.balance = balance; // only once recorded, so a failed sync is retried next time
-    if (fresh.length) logger.info({ virtualAccountId: va.id, credited: fresh.length }, "moneta_deposits_found");
-  })()
-    .catch((err) => logger.warn({ virtualAccountId: va.id, err: (err as Error).message }, "moneta_balance_check_failed"))
-    .finally(() => {
-      state.running = null;
-    });
-  lastCheck.set(va.id, state);
-  return state.running;
-}
-
-// Moneta can take ~20 s to answer: wait this long for new deposits, then answer with
-// what is recorded (the check carries on and the next read shows the rest).
-const DEPOSIT_WAIT_MS = 8_000;
-
-export async function waitForNewDeposits(va: VirtualAccount) {
-  let timer: NodeJS.Timeout | undefined;
-  await Promise.race([refreshDepositsFromMoneta(va), new Promise<void>((resolve) => (timer = setTimeout(resolve, DEPOSIT_WAIT_MS)))]);
-  clearTimeout(timer);
-}
-
 export async function listMyDeposits(userId: string, limit: number) {
-  const va = await getMyVirtualAccount(userId);
-  if (va) await waitForNewDeposits(va);
   const rows = await db.select().from(deposits).where(eq(deposits.userId, userId)).orderBy(desc(deposits.detectedAt)).limit(limit);
   return rows.map(toDepositDto);
 }

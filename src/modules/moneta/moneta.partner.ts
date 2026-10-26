@@ -1,4 +1,8 @@
+import { eq } from "drizzle-orm";
+
 import { env } from "../../core/config/env.js";
+import { db } from "../../core/db/client.js";
+import { providerTokens } from "../../core/db/schema.js";
 import { ServiceUnavailableError } from "../../core/errors/AppError.js";
 import { logger } from "../../core/logger/logger.js";
 import {
@@ -172,17 +176,33 @@ export async function listCredits(reference: string, from: Date, to: Date): Prom
 
 // ---------- Banks & name enquiry ----------
 
-let bankCache: { at: number; banks: Array<{ code: string; name: string }> } | null = null;
+// The bank list barely changes: kept 24 h, in memory and in app.provider_tokens (row
+// "moneta_banks", list as JSON), so restarts and other instances don't spend a proxy request.
+type BankList = Array<{ code: string; name: string }>;
+const BANKS_TTL_MS = 24 * 60 * 60_000;
+const BANKS_ROW = "moneta_banks";
+let bankCache: { until: number; banks: BankList } | null = null;
 
 export async function listBanks() {
-  if (bankCache && Date.now() - bankCache.at < 12 * 60 * 60_000) return bankCache.banks;
+  if (bankCache && Date.now() < bankCache.until) return bankCache.banks;
+  const [row] = await db.select().from(providerTokens).where(eq(providerTokens.provider, BANKS_ROW)).limit(1);
+  if (row?.token && row.expiresAt && row.expiresAt.getTime() > Date.now()) {
+    bankCache = { until: row.expiresAt.getTime(), banks: JSON.parse(row.token) as BankList };
+    return bankCache.banks;
+  }
   const r = await call("GET", "/partner/virtual-accounts/banks");
   if (!ok(r)) throw new MonetaError(messageOf(r) ?? "Couldn't load banks", r.status, null);
   const banks = list(r.json?.data)
     .filter((b) => b.id !== undefined && b.bank_name)
     .map((b) => ({ code: String(b.id), name: String(b.bank_name).trim() }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  bankCache = { at: Date.now(), banks };
+  const until = new Date(Date.now() + BANKS_TTL_MS);
+  bankCache = { until: until.getTime(), banks };
+  await db
+    .insert(providerTokens)
+    .values({ provider: BANKS_ROW, token: JSON.stringify(banks), expiresAt: until, mintedAt: new Date() })
+    .onConflictDoUpdate({ target: providerTokens.provider, set: { token: JSON.stringify(banks), expiresAt: until, mintedAt: new Date() } })
+    .catch((err) => logger.warn({ err: (err as Error).message }, "moneta_banks_store_failed"));
   return banks;
 }
 

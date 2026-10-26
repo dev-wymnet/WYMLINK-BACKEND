@@ -8,8 +8,23 @@ import { AppError } from "../../core/errors/AppError.js";
 import { logger } from "../../core/logger/logger.js";
 
 // Moneta only accepts whitelisted source IPs; route through the fixed-IP proxy when set.
+//
+// Pinning the good IP: Fixie picks the exit IP per tunnel (CONNECT), and counts a tunnel
+// as one request however many HTTPS calls go through it. So all Moneta calls share ONE
+// long-lived tunnel. A tunnel that exits from the IP Moneta doesn't whitelist is thrown
+// away on the first rejection (dropTunnel) and a new one is opened; a tunnel that works
+// is kept, so later calls leave from the whitelisted IP without spending more requests.
 const proxyUrl = env.MONETA_PROXY_URL || env.MONETA_PROXY;
-const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+const TUNNEL_KEEP_MS = 10 * 60_000;
+const newDispatcher = () =>
+  proxyUrl ? new ProxyAgent({ uri: proxyUrl, connections: 1, keepAliveTimeout: TUNNEL_KEEP_MS, keepAliveMaxTimeout: TUNNEL_KEEP_MS }) : undefined;
+let dispatcher = newDispatcher();
+
+function dropTunnel() {
+  const bad = dispatcher;
+  dispatcher = newDispatcher();
+  void bad?.destroy().catch(() => undefined);
+}
 
 // An AppError, so the apps get its message (not a bare 500). 502, not 503: the apps
 // read 503 as "this feature isn't live yet".
@@ -54,6 +69,7 @@ async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }
       { path: new URL(url).pathname, name: e.name, message: e.message?.slice(0, 200), code: e.code ?? e.cause?.code, cause: e.cause?.message?.slice(0, 200) },
       /proxy/i.test(`${e.message} ${e.cause?.message}`) ? "moneta_proxy_refused" : "moneta_unreachable",
     );
+    dropTunnel();
     throw new MonetaError(UNREACHABLE, 502, null);
   }
   try {
@@ -68,9 +84,11 @@ export async function monetaFetch(url: string, init: RequestInit & { timeoutMs?:
   let r = await fetchOnce(url, init);
   for (let i = 1; i < IP_RETRIES && isIpReject(r.json); i++) {
     logger.info({ attempt: i }, "moneta_ip_not_whitelisted_retry");
+    dropTunnel(); // this tunnel exits from the wrong IP: never reuse it
     r = await fetchOnce(url, init);
   }
   if (isIpReject(r.json)) {
+    dropTunnel();
     throw new MonetaError("Moneta is temporarily unreachable. Please try again shortly.", 503, null);
   }
   return r;

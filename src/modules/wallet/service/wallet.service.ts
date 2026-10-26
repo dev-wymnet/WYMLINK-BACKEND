@@ -1,5 +1,4 @@
 import { NotFoundError } from "../../../core/errors/NotFoundError.js";
-import { waitForNewDeposits } from "../../banking/account.service.js";
 import {
   findActiveVirtualAccount,
   findLedgerByIdForUser,
@@ -27,14 +26,9 @@ export function toLedgerDto(e: LedgerEntry) {
   };
 }
 
-// Reading the wallet also picks up new deposits (see refreshDepositsFromMoneta).
 export async function getWalletDetails(userId: string) {
-  let wallet = await getOrCreateWallet(userId);
+  const wallet = await getOrCreateWallet(userId);
   const virtualAccount = await findActiveVirtualAccount(wallet.id);
-  if (virtualAccount) {
-    await waitForNewDeposits(virtualAccount);
-    wallet = await getOrCreateWallet(userId);
-  }
   return { wallet, virtualAccount };
 }
 
