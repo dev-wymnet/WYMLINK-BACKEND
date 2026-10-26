@@ -1,7 +1,7 @@
 # Wymlink mobile app — handoff
 
 For the next AI agent (or developer) building the Wymlink mobile app.
-Read all of it before writing code. Last updated: 2026-10-26.
+Read all of it before writing code. Last updated: 2026-10-26 (Moneta details confirmed).
 
 ---
 
@@ -12,10 +12,10 @@ A customer:
 
 1. signs up, sets a 4-digit transaction PIN (and a 6-digit app passcode on mobile),
 2. gets a naira wallet (one per customer, NGN only),
-3. funds it by bank transfer into a personal virtual account (**not built yet**, see §9),
+3. funds it by bank transfer into a personal Moneta virtual account (**API confirmed, backend not built yet**, see §9),
 4. spends it on airtime, data, cable TV and electricity (built and tested),
 5. sends money to any Nigerian bank (**not built yet**, see §9),
-6. verifies BVN and/or NIN to raise spending limits (built; automated BVN check needs Moneta keys).
+6. verifies BVN and/or NIN to raise spending limits (built; reviewed by staff).
 
 The **mobile app is the priority**. A website already exists (Next.js, same backend). The
 mobile app must use the **same backend API** described here, with no separate backend.
@@ -32,14 +32,16 @@ mobile app must use the **same backend API** described here, with no separate ba
 | Wallet balance, transaction history (ledger), order history | ✅ built, tested |
 | Airtime, data, cable TV, electricity (Peyflex; Reloadly airtime opt-in) | ✅ built, tested against a fake provider |
 | Spending limits by KYC tier | ✅ built, tested |
-| KYC: BVN + NIN submission, staff review, tiers | ✅ built, tested (BVN auto-check needs Moneta keys) |
+| KYC: BVN + NIN submission, staff review, tiers | ✅ built, tested (staff review; Moneta BVN service not used) |
 | Support tickets, account-update requests | ✅ built |
 | Admin console (KYC review, customers, bills, ledger, staff) | ✅ built (web only) |
-| **Virtual account (funding by bank transfer)** | ❌ not built — waiting for WymNet's Moneta credentials |
+| Moneta connection (token, IP whitelist via Fixie, bank list) | ✅ confirmed live (read-only test) |
+| Moneta payment notification URL (`/webhooks/moneta`) | ✅ receiving + recording (not crediting yet) |
+| **Virtual account (funding by bank transfer)** | ❌ backend not built — credentials, whitelist and API docs are ready |
 | **Deposits detection / wallet credit** | ❌ not built (same) |
 | **Bank payouts, name enquiry, bank list for payouts** | ❌ not built — endpoints answer 503 "coming soon" |
 | **Wymlink-to-Wymlink transfers** | ❌ not built |
-| BVN by OTP (NIBSS sends code to BVN phone) | ❌ not built (account-match method is built) |
+| Automated BVN check | ➖ not used (staff review instead) |
 | Email/phone verification codes at sign-up | ❌ not built (DB supports it: `otp_codes.purpose = verify_email/verify_phone`) |
 | Push notifications | ❌ not built |
 | Mobile app | ❌ not started — **your job** |
@@ -57,6 +59,7 @@ mobile app must use the **same backend API** described here, with no separate ba
 | Database | Supabase project `unjupnjycsmmrebpsgrv` (region eu-west-1). All app data is in the private schema `app`. Connect through the **Session pooler** (`aws-0-eu-west-1.pooler.supabase.com:5432`); the direct host is IPv6-only. |
 | Schema (source of truth) | `db/migrations/0001_wymlink_core.sql` |
 | Backend env reference | `.env.example` (names + meaning; real values live only in Render / local `.env`) |
+| **Moneta API docs (official Postman collection)** | `docs/moneta/third_party_api.postman_collection.json` |
 | Reference integration for Moneta | `C:\Users\IMPULSE\Desktop\Etico backend` (another app by the same owner using Moneta: `api/moneta-va.ts`, `api/nibss-bvn.ts`, `README.md`) — **read it, never copy its secrets** |
 
 Health checks: `GET /api/v1/health` → `{"ok":true}`, `GET /api/v1/ready` → `{"status":"ok","checks":{"postgres":true}}`.
@@ -124,8 +127,9 @@ as `₦1,234.56` (`en-NG` locale).
 5. **Create transaction PIN** (4 digits, confirm) → `POST /auth/pin/transaction/set`. Required
    before any purchase; the backend refuses purchases with `TRANSACTION_PIN_NOT_SET` otherwise.
 6. **Verify identity (optional at sign-up, required to raise limits)**: BVN and/or NIN (§7.6).
-7. **Fund wallet**: show the virtual account when it exists (§9). Until then, show a
-   "Funding by bank transfer is coming soon" state.
+7. **Get account number** (after BVN **and** NIN are verified): the customer re-enters BVN + NIN →
+   `POST /wallets/virtual-account` (§9.6) → show account number, bank (e.g. Providus) and name, with copy/share.
+   Until built / verified, show "Verify your BVN and NIN to get your account number" or "coming soon".
 
 ### 7.2 App lock
 - On cold start or after N minutes in background: passcode screen (or biometrics) →
@@ -162,9 +166,9 @@ Flows:
 ### 7.6 Identity (KYC)
 `GET /user/me/verification` → tier + BVN/NIN status.
 - **BVN**: BVN (11 digits) + a bank account opened with that BVN: bank from `GET /user/banks`
-  (6-digit NIBSS codes) + 10-digit account number. The backend checks that the account belongs
-  to the BVN and that the account name matches the Wymlink name.
-- **NIN**: 11 digits; always reviewed by staff for now.
+  (6-digit NIBSS codes) + 10-digit account number. Reviewed by staff (Moneta's BVN service is not used).
+- **NIN**: 11 digits; reviewed by staff.
+- Both verified (tier 2) → the customer can get a Moneta account number (§9.4).
 - Statuses: `NONE` (not submitted), `PENDING` (under review), `VERIFIED`, `FAILED` (+ `reason`).
 
 ### 7.7 Security settings
@@ -178,8 +182,11 @@ Flows:
 - Support tickets: list + create.
 - Limits screen: from `GET /user/me` → `user.limits`.
 
-### 7.9 Send money (UI can be built now, wired later — §9)
-Bank list → account number → resolved name → amount + narration → fee shown → PIN → status.
+### 7.9 Send money & add money (UI can be built now, wired later — §9)
+- **To a bank:** bank list (`GET /payouts/banks`, searchable — 604 banks) → account number → resolved name
+  (`validate-account`) → amount + narration → **fee shown** (`quote`) → PIN → status (poll `status/by-reference`).
+- **To a Wymlink user:** phone/email/account number → name shown → amount → PIN (`POST /transfers`).
+- **Add money:** show the account number; an "I've sent it" button → `POST /wallets/deposits/check`.
 
 ---
 
@@ -357,67 +364,123 @@ Rate limit: 10 purchases / minute per user; 20 name look-ups / minute.
 
 ---
 
-## 9. Not built yet: Moneta (virtual accounts, deposits, payouts)
+## 9. Moneta: virtual accounts, deposits, payouts, transfers (partly built)
 
-**Provider:** Moneta (moneta.ng). WymNet has its own Moneta partner account; the owner is still
-collecting the credentials. Nothing below exists yet except the database tables and the shared
-Moneta HTTP/token helper (`src/modules/moneta/moneta.http.ts`).
+**Provider:** Moneta (moneta.ng) — the **payment gateway / partner virtual-account API**. WymNet has its
+own Moneta partner account. The owner works at Moneta and confirmed on 2026-10-26:
+- All VA services use the **payment gateway**. That is the only Moneta product Wymlink uses now.
+- **Moneta's BVN verification service is NOT used.** BVN and NIN are reviewed by staff in the admin
+  console (the backend's Moneta BVN code stays dormant because `MONETA_BVN_*` are not set).
 
-### 9.1 What Moneta provides (from the Etico integration)
-- **Partner VA API** `https://app.moneta.ng/api/v1/partner/…`
-  - token: `GET /partner/auth/access-token` with `Authorization: Basic base64(clientId:clientSecret)`,
-    then `Authorization: Bearer <token>`. **Only one live token at a time** per credential set
-    (shared via `app.provider_tokens`, already implemented in `moneta.http.ts`).
-  - `POST /partner/virtual-accounts` (create), `GET …/virtual-accounts/account-balance?virtual_account_reference=`,
-    `GET …/transaction-histories`, `POST …/transfer` (VA → VA), `GET …/transfer-histories`,
-    `POST …/payout` (VA → any bank), `GET …/payout-histories`, `GET …/banks`,
-    `GET …/account/resolve?account_number=&bank_id=` (name enquiry).
-- **BVN API** `https://api.moneta.ng/api/v2/bvn/*` (account identity check — built; OTP flow — not built).
-- Requirements / quirks:
-  - **Calls only from a whitelisted IP.** Moneta can't whitelist 54.195.3.54 for WymNet (Etico already uses it),
-    so WymNet asked for **54.217.142.99** (Fixie, EU West; Fixie IPs are shared with other Fixie customers). All Moneta calls go through Fixie via `MONETA_PROXY` (or `MONETA_PROXY_URL`). Fixie sends traffic
-    from two IPs (54.195.3.54 and 54.217.142.99) at random; a call that leaves from the non-whitelisted one is rejected
-    by Moneta with "Ip address not whitelisted" (`responseErrorCode` 03) *before processing*, so
-    `monetaFetch` re-sends it (up to 8 times) — the same approach Etico uses. Free Fixie plan:
-    500 requests / month (retries count), so deposit checks must be on demand, not constant polling.
-    Long term: WymNet's own VPS with one static IP.
-  - Responses can take ~20 s. Use long timeouts (≥ 60 s) and never retry a money call blindly.
-  - **Payment notifications (webhook)**: Moneta will POST deposit notifications to
-    `https://wymlink-backend.onrender.com/api/v1/webhooks/moneta`. The receiver (`src/modules/moneta/moneta.webhook.ts`)
-    currently only **records** them in `app.provider_events` and answers 200; nothing is credited until Moneta's
-    signature scheme and payload format are known. Credit only after verifying the signature **and** confirming the
-    credit in Moneta's transaction history.
-  - **Payout fee is charged on top** of the amount, from the source VA.
-  - Amounts can come back as text with thousands commas (`"1,990.00"`).
+Full API reference (official Postman collection, saved from
+`https://documenter.getpostman.com/view/28325856/2sBYArUCv2`):
+**`docs/moneta/third_party_api.postman_collection.json`** — read it for every request/response shape.
 
-### 9.2 Planned design (backend)
-- One active VA per wallet (`app.virtual_accounts`, `provider='moneta'`), created after sign-up
-  (or after BVN if Moneta requires it — confirm with Moneta).
-- Worker (`PROCESS_ROLE=worker|all`) polls each VA's history; each new credit becomes a row in
-  `app.deposits` (unique per provider reference) and is credited with `app.post_entry`
-  (`entry_type='deposit'`). Credits above the tier's `balance_max` → `held_for_review`.
-- Payouts: name enquiry → `app.payouts` row + debit (amount + fee) in one transaction → one
-  Moneta payout call → success / failed (reverse) / unknown (staff resolve), same pattern as
-  purchases (`src/modules/vtu/vtu.service.ts`).
-- Wymlink-to-Wymlink transfers: ledger-only (`transfer_out` / `transfer_in`), optionally mirrored
-  with a Moneta VA→VA transfer.
+### 9.1 What is confirmed working (live test, 2026-10-26, read-only)
+| Check | Result |
+|---|---|
+| `GET /partner/auth/access-token` (Basic client_id:client_secret) through Fixie | ✅ token issued, valid ~8 h (`data.expires_at`) |
+| `GET /partner/virtual-accounts/banks` through Fixie (4×) | ✅ 604 banks |
+| Same call **directly** (not via Fixie) | ❌ 403 `"IP address not recognized"` — whitelist enforced |
+| Fake credentials / fake token | 401 `"Invalid client credentials"` / `"Unauthorized/Invalid Access Token"` (Moneta checks credentials *before* the IP) |
 
-### 9.3 Planned API (may change; build the UI against it, behind a feature flag)
+### 9.2 Connection details
+- **Base URL:** `https://app.moneta.ng/api/v1` (`MONETA_PARTNER_URL`).
+- **Auth:** `GET /partner/auth/access-token` with `Authorization: Basic base64(client_id:client_secret)` →
+  `{ data: { access_token, expires_at } }`. Every other call: `Authorization: Bearer <access_token>`,
+  `Accept: application/json`, `Content-Type: application/json`.
+  **Only one live token per credential set** — share it across instances (`app.provider_tokens`, already in
+  `src/modules/moneta/moneta.http.ts`); refresh before `expires_at` or on a token rejection.
+- **Service token:** WymNet has a payment-gateway service token (`mnt_…`, stored as `MONETA_SERVICE_TOKEN`).
+  The Postman docs and Etico's working code do **not** send it on VA calls ("the mnt_ service token is NOT the
+  bearer"). Still to confirm with Moneta which header (if any) needs it; if one does, add it in `moneta.http.ts`.
+- **IP whitelist:** calls must come from Fixie (`MONETA_PROXY`, or `MONETA_PROXY_URL` — Render rejected that
+  name, both work). Fixie exits from **54.195.3.54** or **54.217.142.99** at random; WymNet's whitelisted IP is
+  **54.217.142.99** (54.195.3.54 belongs to Etico's whitelist). A call that exits from a non-whitelisted IP
+  is rejected **before processing** (`"IP address not recognized"` / `responseErrorCode` 03), so `monetaFetch`
+  re-sends it, up to 8 times. Fixie IPs are shared with other Fixie customers; long term WymNet gets its own
+  server with one dedicated IP.
+- **Fixie free plan: 500 requests / month** (retries count). Don't poll; check on demand.
+- Responses can be slow (Etico measured ~20 s). Timeouts ≥ 60 s; **never blindly retry a money call** except
+  on the IP rejection above (provably not processed).
+- Amounts may come back as strings, sometimes with thousands commas (`"1,990.00"`): parse defensively.
+
+### 9.3 Moneta endpoints Wymlink uses
+| Wymlink feature | Moneta endpoint | Request | Response (`data`) |
+|---|---|---|---|
+| Login (token) | `GET /partner/auth/access-token` | Basic auth | `{access_token, expires_at}` |
+| **Create customer account** | `POST /partner/virtual-accounts` | `{account_name, account_type:"static", surname, first_name, bvn, nin}` | `{virtual_account_reference, account_number, account_name, bank_name}` (e.g. Providus Bank) |
+| Account details / list | `GET /partner/virtual-accounts?virtual_account_reference=` | — | `[{account_name, account_number, bank_name, account_balance, virtual_account_reference, ussd_reference}]` |
+| Balance | `GET /partner/virtual-accounts/account-balance?virtual_account_reference=` | — | `{balance}` |
+| **Deposits** (incoming transfers) | `GET /virtual-accounts/transaction-histories?fromDate=&toDate=&virtual_account_reference=` (dates `YYYY-MM-DD`) | — | `{reference, virtual_account_reference, action_type:"credit", amount_paid, transaction_fee, amount_settled, paid_at}` (one object or a list) |
+| Bank list | `GET /partner/virtual-accounts/banks` | — | `[{id, bank_name}]` (604 banks; **`id` is Moneta's bank id**, not a NIBSS code) |
+| Name enquiry | `GET /partner/virtual-accounts/account/resolve?account_number=&bank_id=` | — | `{account_name, account_number}` |
+| **Payout to any bank** | `POST /partner/virtual-accounts/payout` | `{beneficiary_bank_id, beneficiary_account_number, amount, narration, source_virtual_accounts:[{virtual_account_reference, amount}]}` | `{reference, amount, transaction_fees, beneficiary_account_name, status, payout_reference, …}` |
+| Payout history (confirm unknown outcomes) | `GET /partner/virtual-accounts/payout-histories?fromDate=&toDate=` | — | `[{reference, amount, beneficiary_*, status, narration, virtual_account_references, payout_reference, created_at}]` |
+| **Wymlink → Wymlink transfer** | `POST /virtual-accounts/transfer` | `{source_virtual_account, destination_virtual_account, amount}` (account number or reference) | `{reference, source_account_reference, destination_account_reference, amount, status, created_at}` |
+| Transfer history | `GET /partner/virtual-accounts/transfer-histories?virtual_account=&fromDate=&toDate=` | — | list of transfers |
+| Payment notifications (inbound) | Moneta → `POST https://wymlink-backend.onrender.com/api/v1/webhooks/moneta` | Moneta's payload (format/signature not shared yet) | we answer `{received:true}` |
+
+The paths without `/partner` (`/virtual-accounts/transaction-histories`, `/virtual-accounts/transfer`) are
+written that way in Moneta's collection; verify on the first live call and fall back to the `/partner/…` form.
+
+**Available in the collection but not used now:** USSD linking (`POST /partner/virtual-accounts/link-account-with-ussd/`),
+Moneta utilities (airtime/data/electricity/TV — `…/utilities/*`; could replace Peyflex later), card payments,
+recurring payments, sub-accounts, NQR (QR code) payments, merchant onboarding.
+
+### 9.4 Facts that shape the design
+1. **Account creation needs the customer's BVN *and* NIN in plain digits.** Wymlink never stores them (only an
+   HMAC + last 4). So the app asks the customer to **re-enter both** on "Get my account number"; the backend
+   checks they match the verified hashes, sends them to Moneta once, and keeps nothing. Only customers with
+   **both BVN and NIN verified** (tier 2) get an account number. (Moneta's doc calls NIN "10-digit"; real NINs
+   are 11 — confirm with Moneta.)
+2. **The money lives in each customer's own Moneta VA.** Wymlink's ledger mirrors it. Payouts and transfers
+   debit the customer's VA (`source_virtual_accounts`).
+3. **Payout fee is charged on top** (`transaction_fees`, ₦30 in Moneta's example) from the source VA: show
+   amount + fee before the PIN, debit amount + fee in the ledger.
+4. **Deposits have a fee too:** credit the customer **`amount_settled`** (e.g. ₦1,000 paid → ₦995 settled).
+5. Deposits arrive by **notification** (webhook) — currently only recorded, never credited from the webhook
+   alone. Credit only after the notification is matched in `transaction-histories` (or after Moneta's
+   signature scheme is verified). One credit per Moneta `reference` (`app.deposits` unique key).
+
+### 9.5 Planned backend design (to build)
+- `POST /wallets/virtual-account` `{bvn, nin}` → verify both match the customer's **verified** KYC hashes →
+  `POST /partner/virtual-accounts` (static) → save in `app.virtual_accounts` (one active per wallet). Idempotent.
+- Deposits: webhook records the event → look it up in `transaction-histories` for that VA → `app.deposits` row
+  (unique per Moneta reference) → `app.post_entry` credit of `amount_settled`, `entry_type='deposit'`.
+  Over the tier's `balance_max` → `held_for_review`. A "check for my deposit" button / opening the wallet
+  triggers one history check (Fixie quota).
+- Payouts: name enquiry → quote (amount + fee) → `app.payouts` row + ledger debit (amount + fee) in one
+  transaction → one Moneta payout call → success / failed (reverse via `post_entry`) / unknown (resolve from
+  `payout-histories`, else staff) — same pattern as purchases (`src/modules/vtu/vtu.service.ts`).
+- Transfers to another Wymlink customer: both need a VA; Moneta VA→VA transfer, then ledger `transfer_out` /
+  `transfer_in` in one transaction after Moneta confirms.
+
+### 9.6 App API for these features (planned — build the UI now, behind a feature flag)
 | Method & path | Notes |
 |---|---|
 | `GET /wallets/me` | `accountNumber`, `bankName`, `reservedAccount.accountName` filled once the VA exists |
-| `POST /wallets/virtual-account` | create/return the VA (idempotent) |
-| `GET /payouts/banks` | `{banks:[{code, name}]}` (code = Moneta bank id/code) |
+| `POST /wallets/virtual-account` | `{bvn, nin}` → `{accountNumber, accountName, bankName}`; needs BVN + NIN verified |
+| `POST /wallets/deposits/check` | "I've sent money" → checks Moneta history once, returns new credits |
+| `GET /payouts/banks` | `{banks:[{code, name}]}` — `code` = Moneta `bank_id` (number as string) |
 | `GET /payouts/validate-account?bankCode=&accountNumber=` | `{accountNumber, accountName, bankCode, bankName}` |
 | `GET /payouts/quote?amount=` | `{amount, fee, total}` |
 | `POST /payouts` | `{reference, amount:"5000.00", bankCode, accountNumber, narration, transactionPin}` → `{reference, status}` |
 | `GET /payouts/status/by-reference?reference=` | `{reference, status, providerReference}` |
 | `GET /payouts/beneficiaries` | saved recipients (`app.beneficiaries`) |
-| `POST /transfers` | to another Wymlink user by phone/email: `{reference, recipient, amount, transactionPin}` |
+| `POST /transfers` | to another Wymlink user by phone/email/account number: `{reference, recipient, amount, transactionPin}` |
 
-Credentials the owner will provide (names only; values go in Render):
-`MONETA_PARTNER_CLIENT_ID`, `MONETA_PARTNER_CLIENT_SECRET`, `MONETA_BVN_CLIENT_ID`,
-`MONETA_BVN_CLIENT_SECRET`, `MONETA_BVN_SERVICE_KEY`, optional `MONETA_PROXY_URL`.
+Until built, `/payouts/*` answer **503 `SERVICE_UNAVAILABLE`** and `accountNumber` is `null`.
+
+### 9.7 Render environment for Moneta (names only — values never in code/docs)
+| Variable | Status |
+|---|---|
+| `MONETA_PARTNER_CLIENT_ID` / `MONETA_PARTNER_CLIENT_SECRET` | set by owner (payment-gateway partner credentials) |
+| `MONETA_PROXY` | set (Fixie proxy URL) |
+| `MONETA_SERVICE_TOKEN` | payment-gateway service token; usage to confirm (not yet read by the code) |
+| `MONETA_PARTNER_URL` | default `https://app.moneta.ng/api/v1` |
+| `MONETA_BVN_*` | **leave unset** (BVN service not used) |
+
 
 ---
 
@@ -505,8 +568,8 @@ live backend only for read-only screens and auth.
 
 ## 13. Known gaps and next steps
 
-1. **Moneta module** (VA, deposit polling, payouts, banks, name enquiry, transfers, BVN OTP) — needs
-   WymNet's Moneta credentials and the IP whitelist (§9).
+1. **Moneta module** (VA creation, deposits, payouts, banks, name enquiry, transfers) — credentials, IP
+   whitelist and API docs are ready (§9); confirm the service-token header and NIN length with Moneta.
 2. **Refresh-token rotation** with reuse detection (`sessions.previous_token_hash` already exists). Mobile sessions already last 30 days.
 3. Passcode reset by email code (`otp_codes.purpose='reset_passcode'` is ready in the DB).
 4. Email/phone verification at sign-up (`verify_email` / `verify_phone`).
@@ -517,3 +580,5 @@ live backend only for read-only screens and auth.
 8. Tier limits are placeholders — confirm with WymNet compliance.
 9. Admin 2FA (recommended before launch).
 10. Render free plan sleeps; WymNet will move to its own VPS (static IP for Moneta) when they pay.
+11. Fixie IPs are shared with other Fixie customers (including Etico); move Moneta traffic to a dedicated IP before launch.
+12. Moneta credentials and the service token were pasted in chat during setup — rotate them before real customers.
