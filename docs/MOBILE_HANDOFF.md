@@ -12,9 +12,9 @@ A customer:
 
 1. signs up, sets a 4-digit transaction PIN (and a 6-digit app passcode on mobile),
 2. gets a naira wallet (one per customer, NGN only),
-3. funds it by bank transfer into a personal Moneta virtual account (**API confirmed, backend not built yet**, see §9),
+3. funds it by bank transfer into a personal Moneta virtual account (built, see §8.8 and §9),
 4. spends it on airtime, data, cable TV and electricity (built and tested),
-5. sends money to any Nigerian bank (**not built yet**, see §9),
+5. sends money to any Nigerian bank or to another Wymlink customer (built, see §8.8 and §9),
 6. verifies BVN and/or NIN to raise spending limits (built; reviewed by staff).
 
 The **mobile app is the priority**. A website already exists (Next.js, same backend). The
@@ -37,10 +37,10 @@ mobile app must use the **same backend API** described here, with no separate ba
 | Admin console (KYC review, customers, bills, ledger, staff) | ✅ built (web only) |
 | Moneta connection (token, IP whitelist via Fixie, bank list) | ✅ confirmed live (read-only test) |
 | Moneta payment notification URL (`/webhooks/moneta`) | ✅ receiving + recording (not crediting yet) |
-| **Virtual account (funding by bank transfer)** | ❌ backend not built — credentials, whitelist and API docs are ready |
-| **Deposits detection / wallet credit** | ❌ not built (same) |
-| **Bank payouts, name enquiry, bank list for payouts** | ❌ not built — endpoints answer 503 "coming soon" |
-| **Wymlink-to-Wymlink transfers** | ❌ not built |
+| Account number (Moneta virtual account) | ✅ built, tested against a fake Moneta (40/40) |
+| Deposits (notification → confirmed in Moneta history → wallet credit) | ✅ built, tested |
+| Bank payouts: bank list, name enquiry, fee quote, payout, status | ✅ built, tested |
+| Wymlink-to-Wymlink transfers | ✅ built, tested |
 | Automated BVN check | ➖ not used (staff review instead) |
 | Email/phone verification codes at sign-up | ❌ not built (DB supports it: `otp_codes.purpose = verify_email/verify_phone`) |
 | Push notifications | ❌ not built |
@@ -353,10 +353,53 @@ Rate limit: 10 purchases / minute per user; 20 name look-ups / minute.
 - `status` (show this): `success` | `pending` | `failed`.
 - `orderStatus` (internal): `processing | success | failed | refunded | unknown`.
 
-### 8.8 Payouts (not live)
-`GET /payouts/banks`, `GET /payouts/validate-account`, `POST /payouts`,
-`GET /payouts/status/by-reference`, `GET /payouts/:id` → all **503 `SERVICE_UNAVAILABLE`**
-("Bank transfers are coming soon.") until §9 is built.
+### 8.8 Account number, deposits, payouts, transfers (Moneta)
+All need sign-in. Money amounts in requests: naira string or number with ≤ 2 decimals ("5000" or "5000.50").
+Each money call takes a client `reference` (8–128 chars of `A-Z a-z 0-9 _ - : .`), one per attempt, reused on retry.
+
+**Account number**
+| Method & path | Body / query | Response |
+|---|---|---|
+| `GET /wallets/virtual-account` | — | `{account: {accountNumber, accountName, bankName, status, createdAt} \| null}` |
+| `POST /wallets/virtual-account` | `{bvn (11 digits), nin (10–11 digits)}` | 201 `{account}`. Needs BVN **and** NIN verified (tier 2); the numbers must match the verified ones. Idempotent. 5 / hour |
+| `GET /wallets/me` | — | now includes `accountNumber`, `bankName`, `reservedAccount.accountName` |
+
+**Deposits** (credited automatically when Moneta notifies us; the customer can also ask)
+| Method & path | Response |
+|---|---|
+| `POST /wallets/deposits/check` | `{newDeposits: [Deposit]}` — "I've sent money". **1 per 2 minutes** (proxy quota) |
+| `GET /wallets/deposits?limit=50` | `{deposits: [Deposit]}` |
+
+`Deposit`: `{id, reference, amountPaid, fee, amount (credited = settled), senderName, status: "credited" | "under_review", receivedAt, creditedAt}`.
+`under_review` = would take the wallet over its tier's balance limit; staff release it.
+
+**Bank payouts**
+| Method & path | Body / query | Response |
+|---|---|---|
+| `GET /payouts/banks` | — | `{banks: [{code, name}]}` (Moneta bank ids as strings, ~600 banks — make it searchable) |
+| `GET /payouts/validate-account` | `?bankCode=&accountNumber=` | `{accountNumber, accountName, bankCode, bankName}` (400 if not found). 20 / 5 min |
+| `GET /payouts/quote` | `?amount=` | `{amount, fee, total}` — show before the PIN |
+| `POST /payouts` | `{reference, amount, bankCode, accountNumber, narration (≤100), transactionPin}` | `Payout`. Minimum ₦100. 10 / 5 min |
+| `GET /payouts/status/by-reference` | `?reference=` | `Payout` (also re-checks Moneta for a pending one) |
+| `GET /payouts` · `GET /payouts/:id` | — | `{payouts: [Payout]}` · `Payout` |
+| `GET /payouts/beneficiaries` | — | `{beneficiaries: [{id, bankCode, bankName, accountNumber, accountName, lastUsedAt}]}` (saved after a successful payout) |
+
+`Payout`: `{id, reference, amount, fee, total, bankCode, bankName, accountNumber, accountName, narration, status, refunded, providerReference, lastError, createdAt, completedAt}`,
+`status` ∈ `success | processing | pending | failed` (`failed` + `refunded: true` = amount + fee returned).
+`pending` = Moneta didn't confirm in time; poll `status/by-reference` every ~30 s for a few minutes, then show "processing, we'll update you".
+
+**To another Wymlink customer**
+| Method & path | Body / query | Response |
+|---|---|---|
+| `GET /transfers/recipient` | `?query=` phone, email or Wymlink account number | `{name, accountNumber}` (404 if none; 400 if yourself) |
+| `POST /transfers` | `{reference, recipient, amount, narration?, transactionPin}` | `{transfer: Transfer}`. Minimum ₦100. 10 / 5 min |
+| `GET /transfers` · `GET /transfers/:id` | — | `{transfers: [Transfer]}` · `{transfer}` |
+
+`Transfer`: `{id, reference, direction: "outgoing" | "incoming", amount, narration, counterparty, status: success | pending | failed, refunded, createdAt, completedAt}`.
+Both customers need an account number. No fee.
+
+Errors to expect: `INSUFFICIENT_BALANCE`, `LIMIT_EXCEEDED` / `BVN_VERIFICATION_REQUIRED` (amount + fee counts),
+`INVALID_TRANSACTION_PIN`, `VALIDATION_ERROR` ("Get your account number first", wrong bank/account), `SERVICE_UNAVAILABLE` (Moneta not configured).
 
 ### 8.9 Not for the app
 `/admin/*` (staff console, separate login with 8-hour sessions), `/system/*` (staff only),
@@ -443,7 +486,7 @@ recurring payments, sub-accounts, NQR (QR code) payments, merchant onboarding.
    alone. Credit only after the notification is matched in `transaction-histories` (or after Moneta's
    signature scheme is verified). One credit per Moneta `reference` (`app.deposits` unique key).
 
-### 9.5 Planned backend design (to build)
+### 9.5 Backend design (built — `src/modules/banking/`, `src/modules/moneta/moneta.partner.ts`)
 - `POST /wallets/virtual-account` `{bvn, nin}` → verify both match the customer's **verified** KYC hashes →
   `POST /partner/virtual-accounts` (static) → save in `app.virtual_accounts` (one active per wallet). Idempotent.
 - Deposits: webhook records the event → look it up in `transaction-histories` for that VA → `app.deposits` row
@@ -456,7 +499,7 @@ recurring payments, sub-accounts, NQR (QR code) payments, merchant onboarding.
 - Transfers to another Wymlink customer: both need a VA; Moneta VA→VA transfer, then ledger `transfer_out` /
   `transfer_in` in one transaction after Moneta confirms.
 
-### 9.6 App API for these features (planned — build the UI now, behind a feature flag)
+### 9.6 App API for these features (superseded — see §8.8 for the built endpoints)
 | Method & path | Notes |
 |---|---|
 | `GET /wallets/me` | `accountNumber`, `bankName`, `reservedAccount.accountName` filled once the VA exists |
@@ -470,14 +513,19 @@ recurring payments, sub-accounts, NQR (QR code) payments, merchant onboarding.
 | `GET /payouts/beneficiaries` | saved recipients (`app.beneficiaries`) |
 | `POST /transfers` | to another Wymlink user by phone/email/account number: `{reference, recipient, amount, transactionPin}` |
 
-Until built, `/payouts/*` answer **503 `SERVICE_UNAVAILABLE`** and `accountNumber` is `null`.
+`accountNumber` is `null` until the customer opens their account. Staff settle unconfirmed payouts/transfers and release held deposits
+via `POST /admin/banking/payouts/:id/resolve`, `/admin/banking/transfers/:id/resolve` (`{decision: success|reverse, note}`) and
+`/admin/banking/deposits/:id/release` (`{note}`). Wymlink → Wymlink transfers are stored in `app.transfers` (migration `0002_transfers.sql`).
+Tests: fake Moneta + real Supabase, **40/40** (account opening, deposits incl. Moneta ignoring the account filter, repeated/forged
+notifications, payouts success/declined/timed-out-but-delivered, fee difference, replays, transfers, drift = 0).
 
 ### 9.7 Render environment for Moneta (names only — values never in code/docs)
 | Variable | Status |
 |---|---|
 | `MONETA_PARTNER_CLIENT_ID` / `MONETA_PARTNER_CLIENT_SECRET` | set by owner (payment-gateway partner credentials) |
 | `MONETA_PROXY` | set (Fixie proxy URL) |
-| `MONETA_SERVICE_TOKEN` | payment-gateway service token; usage to confirm (not yet read by the code) |
+| `MONETA_SERVICE_TOKEN` | payment-gateway service token; usage to confirm (read into config, not sent yet) |
+| `MONETA_PAYOUT_FEE` | naira fee quoted per bank payout (default 30); the fee Moneta actually reports is what the ledger keeps |
 | `MONETA_PARTNER_URL` | default `https://app.moneta.ng/api/v1` |
 | `MONETA_BVN_*` | **leave unset** (BVN service not used) |
 
@@ -568,8 +616,8 @@ live backend only for read-only screens and auth.
 
 ## 13. Known gaps and next steps
 
-1. **Moneta module** (VA creation, deposits, payouts, banks, name enquiry, transfers) — credentials, IP
-   whitelist and API docs are ready (§9); confirm the service-token header and NIN length with Moneta.
+1. **Moneta module is built and tested against a fake Moneta.** First live checks: open one real account, send a small
+   deposit, one small payout, one transfer. Confirm the service-token header (if any) and NIN length with Moneta.
 2. **Refresh-token rotation** with reuse detection (`sessions.previous_token_hash` already exists). Mobile sessions already last 30 days.
 3. Passcode reset by email code (`otp_codes.purpose='reset_passcode'` is ready in the DB).
 4. Email/phone verification at sign-up (`verify_email` / `verify_phone`).

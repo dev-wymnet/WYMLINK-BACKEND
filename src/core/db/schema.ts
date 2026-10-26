@@ -338,3 +338,24 @@ export const trainingRegistrations = app.table("training_registrations", {
   phone: text("phone").notNull(),
   createdAt: ts("created_at").notNull().defaultNow(),
 });
+
+export const transfers = app.table("transfers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  reference: text("reference").notNull(),
+  senderUserId: uuid("sender_user_id").notNull(),
+  senderWalletId: uuid("sender_wallet_id").notNull(),
+  recipientUserId: uuid("recipient_user_id").notNull(),
+  recipientWalletId: uuid("recipient_wallet_id").notNull(),
+  amount: money("amount").notNull(),
+  narration: text("narration"),
+  provider: text("provider").notNull().default("moneta"),
+  providerReference: text("provider_reference"),
+  status: text("status").notNull().default("processing"), // processing | success | reversed | unknown
+  lastError: text("last_error"),
+  debitEntryId: uuid("debit_entry_id"),
+  creditEntryId: uuid("credit_entry_id"),
+  reversalEntryId: uuid("reversal_entry_id"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+  completedAt: ts("completed_at"),
+});

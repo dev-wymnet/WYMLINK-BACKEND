@@ -22,6 +22,19 @@ import {
 const identityHash = (kind: "bvn" | "nin", value: string) =>
   createHmac("sha256", env.KYC_HASH_SECRET).update(`${kind}:${value}`).digest("hex");
 
+// True when `bvn` and `nin` are exactly the customer's verified BVN and NIN.
+// Lets a feature that needs the plain numbers (Moneta account creation) use what
+// the customer re-types without Wymlink ever storing them.
+export async function matchesVerifiedIdentity(userId: string, bvn: string, nin: string) {
+  const p = await getKycProfile(userId);
+  return (
+    p?.bvnStatus === "verified" &&
+    p?.ninStatus === "verified" &&
+    p.bvnHash === identityHash("bvn", bvn) &&
+    p.ninHash === identityHash("nin", nin)
+  );
+}
+
 // Minimum name similarity Moneta must report between the bank account and the profile.
 const NAME_MATCH_MIN = 70;
 

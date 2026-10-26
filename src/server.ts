@@ -23,7 +23,7 @@ import { billsRoutes, ordersRoutes, telecomRoutes } from "./modules/vtu/vtu.rout
 import { dashboardRoutes } from "./modules/dashboard/routes/dashboard.routes.js";
 import { systemRoutes } from "./modules/system/routes/system.routes.js";
 import { trainingRoutes } from "./modules/training/routes/training.routes.js";
-import { payoutRoutes } from "./modules/payout/routes/payout.routes.js";
+import { accountRoutes, adminBankingRoutes, payoutRoutes, transferRoutes } from "./modules/banking/banking.routes.js";
 import { monetaWebhookRoutes } from "./modules/moneta/moneta.webhook.js";
 import { adminAuthRoutes } from "./modules/admin/auth/routes/adminAuth.routes.js";
 import { adminManagementRoutes } from "./modules/admin/management/routes/admin.routes.js";
@@ -134,6 +134,8 @@ export function createServer(): Express {
   api.use("/auth/pin", pinRoutes);
   api.use("/user", userRoutes);
   api.use("/wallets", walletRoutes);
+  api.use("/wallets", accountRoutes);
+  api.use("/transfers", transferRoutes);
   api.use("/telecom", telecomRoutes);
   api.use("/bills", billsRoutes);
   api.use("/orders", ordersRoutes);
@@ -150,6 +152,7 @@ export function createServer(): Express {
   admin.use("/bills", adminBillsRoutes);
   admin.use("/dashboard", adminDashboardRoutes);
   admin.use("/customers", adminCustomersRoutes);
+  admin.use("/banking", adminBankingRoutes);
   api.use("/admin", admin);
 
   app.use("/api/v1", api);

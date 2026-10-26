@@ -57,6 +57,13 @@ const envSchema = z.object({
   MONETA_PROXY_URL: z.string().default(""),
   // Same as MONETA_PROXY_URL (some hosts reject that name); either works.
   MONETA_PROXY: z.string().default(""),
+  // Payment-gateway service token. Not sent on partner VA calls (Moneta's docs and
+  // Etico's live integration use client id/secret only); kept for when it is needed.
+  MONETA_SERVICE_TOKEN: z.string().default(""),
+  // Moneta's charge per bank payout (naira), taken from the customer's VA on top of
+  // the amount. Shown to the customer before they confirm; the actual charge Moneta
+  // reports is what the ledger finally records.
+  MONETA_PAYOUT_FEE: z.coerce.number().min(0).max(1000).default(30),
 
   PEYFLEX_BASE_URL: z.string().url().default("https://client.peyflex.com.ng"),
 
