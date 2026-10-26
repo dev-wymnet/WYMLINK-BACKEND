@@ -55,6 +55,8 @@ const envSchema = z.object({
   MONETA_PARTNER_CLIENT_ID: z.string().default(""),
   MONETA_PARTNER_CLIENT_SECRET: z.string().default(""),
   MONETA_PROXY_URL: z.string().default(""),
+  // Same as MONETA_PROXY_URL (some hosts reject that name); either works.
+  MONETA_PROXY: z.string().default(""),
 
   PEYFLEX_BASE_URL: z.string().url().default("https://client.peyflex.com.ng"),
 

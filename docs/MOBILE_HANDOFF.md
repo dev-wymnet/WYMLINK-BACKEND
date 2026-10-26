@@ -375,7 +375,7 @@ Moneta HTTP/token helper (`src/modules/moneta/moneta.http.ts`).
 - **BVN API** `https://api.moneta.ng/api/v2/bvn/*` (account identity check — built; OTP flow — not built).
 - Requirements / quirks:
   - **Calls only from a whitelisted IP.** Moneta can't whitelist 54.195.3.54 for WymNet (Etico already uses it),
-    so WymNet asked for **54.217.142.99** (Fixie, EU West; Fixie IPs are shared with other Fixie customers). All Moneta calls go through Fixie via `MONETA_PROXY_URL`. Fixie sends traffic
+    so WymNet asked for **54.217.142.99** (Fixie, EU West; Fixie IPs are shared with other Fixie customers). All Moneta calls go through Fixie via `MONETA_PROXY` (or `MONETA_PROXY_URL`). Fixie sends traffic
     from two IPs (54.195.3.54 and 54.217.142.99) at random; a call that leaves from the non-whitelisted one is rejected
     by Moneta with "Ip address not whitelisted" (`responseErrorCode` 03) *before processing*, so
     `monetaFetch` re-sends it (up to 8 times) — the same approach Etico uses. Free Fixie plan:

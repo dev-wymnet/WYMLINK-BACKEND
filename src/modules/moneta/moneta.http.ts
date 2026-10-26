@@ -7,7 +7,8 @@ import { providerTokens } from "../../core/db/schema.js";
 import { logger } from "../../core/logger/logger.js";
 
 // Moneta only accepts whitelisted source IPs; route through the fixed-IP proxy when set.
-const dispatcher = env.MONETA_PROXY_URL ? new ProxyAgent(env.MONETA_PROXY_URL) : undefined;
+const proxyUrl = env.MONETA_PROXY_URL || env.MONETA_PROXY;
+const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
 
 export class MonetaError extends Error {
   constructor(message: string, readonly status: number, readonly body: unknown) {
