@@ -9,6 +9,7 @@ import { CUSTOMER_SESSION_KINDS, revokeUserSessions } from "../../../auth/reposi
 import { getKycProfile } from "../../../verification/repository/verification.repository.js";
 import { reviewKyc } from "../../../verification/service/verification.service.js";
 import { toLedgerDto } from "../../../wallet/service/wallet.service.js";
+import { accountSetupState, getMyVirtualAccount } from "../../../banking/account.service.js";
 import {
   countCustomerLedger,
   countCustomers,
@@ -74,6 +75,10 @@ export async function getCustomerAdmin(customerId: string) {
   if (!row || row.user.role !== "customer") throw new NotFoundError("Customer not found");
   const { user: u, kyc: k } = row;
   const wallet = await getCustomerWallet(customerId);
+  // The Moneta account number, or where it is: opening (also retries a failed attempt),
+  // verify (BVN + NIN not both approved), needs_details (verified before the BVN was kept).
+  const va = await getMyVirtualAccount(customerId);
+  const accountSetup = va ? null : await accountSetupState(customerId);
   const bvnStatus = up(k?.bvnStatus);
   const ninStatus = up(k?.ninStatus);
 
@@ -105,6 +110,8 @@ export async function getCustomerAdmin(customerId: string) {
     wallets: wallet
       ? [{ id: wallet.id, currencyCode: wallet.currencyCode, availableBalance: wallet.availableBalance, lockedBalance: "0.00", status: wallet.status, createdAt: wallet.createdAt }]
       : [],
+    virtualAccount: va ? { accountNumber: va.accountNumber, accountName: va.accountName, bankName: va.bankName, openedAt: va.createdAt } : null,
+    accountSetup,
     joinedAt: u.createdAt,
     updatedAt: u.updatedAt,
   };
