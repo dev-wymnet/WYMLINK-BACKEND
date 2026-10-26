@@ -187,11 +187,12 @@ export async function syncDeposits(va: VirtualAccount) {
   return fresh;
 }
 
-// Deposits arrive on their own: whenever the wallet is read, Moneta's balance for the
-// customer's account is checked (at most once a minute per account, to stay inside the
-// proxy's request quota), and only when it has changed is the history read and any new
-// credits recorded. The first check after a restart always reads the history.
-const BALANCE_CHECK_MS = 60_000;
+// Deposits arrive with Moneta's payment notification (moneta.webhook.ts). As a backup,
+// reading the wallet checks Moneta's balance for the customer's account (at most every
+// 15 minutes per account: every Moneta call spends the proxy's monthly request quota),
+// and only when it has changed is the history read and any new credits recorded. The
+// first check after a restart always reads the history.
+const BALANCE_CHECK_MS = 15 * 60_000;
 const lastCheck = new Map<string, { at: number; balance: number | null; running: Promise<void> | null }>();
 
 export function refreshDepositsFromMoneta(va: VirtualAccount): Promise<void> {

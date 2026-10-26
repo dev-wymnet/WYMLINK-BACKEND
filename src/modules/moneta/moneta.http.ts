@@ -4,18 +4,23 @@ import { eq, sql } from "drizzle-orm";
 import { env } from "../../core/config/env.js";
 import { db } from "../../core/db/client.js";
 import { providerTokens } from "../../core/db/schema.js";
+import { AppError } from "../../core/errors/AppError.js";
 import { logger } from "../../core/logger/logger.js";
 
 // Moneta only accepts whitelisted source IPs; route through the fixed-IP proxy when set.
 const proxyUrl = env.MONETA_PROXY_URL || env.MONETA_PROXY;
 const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
 
-export class MonetaError extends Error {
+// An AppError, so the apps get its message (not a bare 500). 502, not 503: the apps
+// read 503 as "this feature isn't live yet".
+export class MonetaError extends AppError {
   constructor(message: string, readonly status: number, readonly body: unknown) {
-    super(message);
+    super(message, { statusCode: 502, code: "PROVIDER_UNAVAILABLE" });
     this.name = "MonetaError";
   }
 }
+
+const UNREACHABLE = "We couldn't reach the bank network. Please try again in a few minutes.";
 
 export type MonetaResponse = { status: number; json: any };
 
@@ -31,12 +36,26 @@ const isIpReject = (json: any) =>
 
 async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }): Promise<MonetaResponse> {
   const { timeoutMs: _t, ...rest } = init;
-  const res = await fetch(url, {
-    ...rest,
-    ...(dispatcher ? { dispatcher } : {}),
-    signal: AbortSignal.timeout(init.timeoutMs ?? 45_000),
-  });
-  const text = await res.text();
+  let res: Awaited<ReturnType<typeof fetch>>;
+  let text: string;
+  try {
+    res = await fetch(url, {
+      ...rest,
+      ...(dispatcher ? { dispatcher } : {}),
+      signal: AbortSignal.timeout(init.timeoutMs ?? 45_000),
+    });
+    text = await res.text();
+  } catch (err) {
+    // The proxy refused the tunnel (e.g. Fixie's monthly quota used up: "Proxy response
+    // (407|403) !== 200"), a timeout, or a network failure. Message and code only: the
+    // error object can carry the proxy URL, which holds its credentials.
+    const e = err as Error & { code?: string; cause?: { code?: string; message?: string } };
+    logger.error(
+      { path: new URL(url).pathname, name: e.name, message: e.message?.slice(0, 200), code: e.code ?? e.cause?.code, cause: e.cause?.message?.slice(0, 200) },
+      /proxy/i.test(`${e.message} ${e.cause?.message}`) ? "moneta_proxy_refused" : "moneta_unreachable",
+    );
+    throw new MonetaError(UNREACHABLE, 502, null);
+  }
   try {
     return { status: res.status, json: JSON.parse(text) };
   } catch {

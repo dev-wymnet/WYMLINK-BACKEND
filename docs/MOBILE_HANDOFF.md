@@ -187,7 +187,7 @@ Flows:
   (`validate-account`) → amount + narration → **fee shown** (`quote`) → PIN → status (poll `status/by-reference`).
 - **To a Wymlink user:** phone/email/account number → name shown → amount → PIN (`POST /transfers`).
 - **Add money:** show the account number. Deposits arrive by themselves: reading the wallet (`GET /dashboard/home`,
-  `GET /wallets/me`) checks the account's Moneta balance (at most once a minute) and records new credits. No button.
+  `GET /wallets/me`) checks the account's Moneta balance (at most every 15 minutes, a backup to Moneta's payment notification) and records new credits. No button.
 
 ---
 
@@ -507,7 +507,7 @@ recurring payments, sub-accounts, NQR (QR code) payments, merchant onboarding.
 |---|---|
 | `GET /wallets/me` | `accountNumber`, `bankName`, `reservedAccount.accountName` filled once the VA exists |
 | `POST /wallets/virtual-account` | `{bvn, nin}` → `{accountNumber, accountName, bankName}`; needs BVN + NIN verified |
-| `GET /dashboard/home`, `GET /wallets/me` | also check the account's Moneta balance (≤ 1/min) and record new deposits (removed: `POST /wallets/deposits/check`) |
+| `GET /dashboard/home`, `GET /wallets/me` | also check the account's Moneta balance (≤ 1 per 15 min) and record new deposits (removed: `POST /wallets/deposits/check`) |
 | `GET /payouts/banks` | `{banks:[{code, name}]}` — `code` = Moneta `bank_id` (number as string) |
 | `GET /payouts/validate-account?bankCode=&accountNumber=` | `{accountNumber, accountName, bankCode, bankName}` |
 | `GET /payouts/quote?amount=` | `{amount, fee, total}` |
