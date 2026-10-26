@@ -21,11 +21,13 @@ export type MonetaResponse = { status: number; json: any };
 
 // The proxy (Fixie) load-balances across two static IPs, but Moneta whitelists
 // only ONE of them for WymNet. A request that leaves from the other IP is rejected with
-// "Ip address not whitelisted" (responseErrorCode 03) before Moneta processes it,
-// so re-sending it is safe, even for payouts, until it leaves from the right IP.
+// "IP address not recognized" or "Ip address not whitelisted" (responseErrorCode 03)
+// before Moneta processes it, so re-sending it is safe, even for payouts, until it
+// leaves from the right IP. The wording and the field it sits in vary by endpoint.
 const IP_RETRIES = 8;
 const isIpReject = (json: any) =>
-  json?.responseErrorCode === "03" || /not\s*whitelist/i.test(String(json?.message ?? json?.error ?? ""));
+  json?.responseErrorCode === "03" ||
+  /\bip\b[^"]{0,20}not\s*(whitelist|recogni[sz]ed)|not\s*whitelist/i.test(JSON.stringify(json ?? "").slice(0, 400));
 
 async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }): Promise<MonetaResponse> {
   const { timeoutMs: _t, ...rest } = init;
