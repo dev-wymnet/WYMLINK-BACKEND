@@ -7,6 +7,7 @@ import { kycAttempts, kycProfiles } from "../../../core/db/schema.js";
 import { ValidationError } from "../../../core/errors/ValidationError.js";
 import { NotFoundError } from "../../../core/errors/NotFoundError.js";
 import { logger } from "../../../core/logger/logger.js";
+import { seal } from "../../../core/utils/seal.js";
 import { findBank } from "../../../core/data/banks.js";
 import { findUserById } from "../../user/repository/user.repository.js";
 import { bvnAccountIdentityCheck, monetaBvnConfigured } from "../../moneta/moneta.bvn.js";
@@ -33,6 +34,20 @@ export async function matchesVerifiedIdentity(userId: string, bvn: string, nin: 
     p.bvnHash === identityHash("bvn", bvn) &&
     p.ninHash === identityHash("nin", nin)
   );
+}
+
+// True when `bvn` is the customer's verified BVN (checks a decrypted copy before use).
+export async function matchesVerifiedBvn(userId: string, bvn: string) {
+  const p = await getKycProfile(userId);
+  return p?.bvnStatus === "verified" && p.bvnHash === identityHash("bvn", bvn);
+}
+
+// Once BVN and NIN are both verified, the customer's Moneta account is opened
+// automatically (banking/account.service.ts) — nobody has to ask for it.
+function queueAccountOpening(userId: string) {
+  void import("../../banking/account.service.js")
+    .then((m) => m.issueAccountWhenReady(userId))
+    .catch((err) => logger.warn({ userId, err: (err as Error).message }, "va_auto_open_failed"));
 }
 
 // Minimum name similarity Moneta must report between the bank account and the profile.
@@ -82,14 +97,14 @@ async function linkedElsewhere(userId: string, kind: "bvn" | "nin", hash: string
 }
 
 // Marks one identity verified and raises the tier, atomically.
-async function markVerified(userId: string, kind: "bvn" | "nin", hash: string, last4: string, provider: string) {
+async function markVerified(userId: string, kind: "bvn" | "nin", hash: string, last4: string, provider: string, sealed?: string) {
   try {
     await db.transaction(async (tx) => {
       await upsertKycProfile(
         tx,
         userId,
         kind === "bvn"
-          ? { bvnHash: hash, bvnLast4: last4, bvnStatus: "verified", bvnVerifiedAt: new Date(), provider }
+          ? { bvnHash: hash, bvnLast4: last4, bvnStatus: "verified", bvnVerifiedAt: new Date(), provider, ...(sealed ? { bvnSealed: sealed } : {}) }
           : { ninHash: hash, ninLast4: last4, ninStatus: "verified", ninVerifiedAt: new Date(), provider },
       );
       await syncKycTier(tx, userId);
@@ -100,12 +115,12 @@ async function markVerified(userId: string, kind: "bvn" | "nin", hash: string, l
   }
 }
 
-async function markStatus(userId: string, kind: "bvn" | "nin", hash: string, last4: string, status: "pending" | "failed") {
+async function markStatus(userId: string, kind: "bvn" | "nin", hash: string, last4: string, status: "pending" | "failed", sealed?: string) {
   await upsertKycProfile(
     db,
     userId,
     kind === "bvn"
-      ? { bvnHash: hash, bvnLast4: last4, bvnStatus: status, bvnVerifiedAt: null }
+      ? { bvnHash: hash, bvnLast4: last4, bvnStatus: status, bvnVerifiedAt: null, bvnSealed: status === "failed" ? null : (sealed ?? undefined) }
       : { ninHash: hash, ninLast4: last4, ninStatus: status, ninVerifiedAt: null },
   );
 }
@@ -132,13 +147,14 @@ export async function submitBvnVerification(input: {
 
   const hash = identityHash("bvn", input.bvn);
   const last4 = input.bvn.slice(-4);
+  const sealed = seal(input.bvn);
   if (await linkedElsewhere(input.userId, "bvn", hash)) {
     await recordKycAttempt({ userId: input.userId, kind: "bvn_account_match", outcome: "failed", provider: "wymlink", failureReason: "already_linked" });
     throw new ValidationError(ALREADY_LINKED);
   }
 
   if (!monetaBvnConfigured()) {
-    await markStatus(input.userId, "bvn", hash, last4, "pending");
+    await markStatus(input.userId, "bvn", hash, last4, "pending", sealed);
     await recordKycAttempt({ userId: input.userId, kind: "bvn", outcome: "started", provider: "manual" });
     return getMyVerificationStatus(input.userId);
   }
@@ -155,13 +171,13 @@ export async function submitBvnVerification(input: {
     });
   } catch (err) {
     logger.warn({ userId: input.userId, err: (err as Error).message }, "kyc_bvn_provider_error");
-    await markStatus(input.userId, "bvn", hash, last4, "pending");
+    await markStatus(input.userId, "bvn", hash, last4, "pending", sealed);
     await recordKycAttempt({ userId: input.userId, kind: "bvn_account_match", outcome: "error", provider: "moneta", failureReason: "provider_error" });
     return getMyVerificationStatus(input.userId);
   }
 
   if (!check.ok) {
-    await markStatus(input.userId, "bvn", hash, last4, "pending");
+    await markStatus(input.userId, "bvn", hash, last4, "pending", sealed);
     await recordKycAttempt({ userId: input.userId, kind: "bvn_account_match", outcome: "error", provider: "moneta", providerReference: check.reference, failureReason: "provider_error" });
     return getMyVerificationStatus(input.userId);
   }
@@ -177,8 +193,9 @@ export async function submitBvnVerification(input: {
     );
   }
 
-  await markVerified(input.userId, "bvn", hash, last4, "moneta");
+  await markVerified(input.userId, "bvn", hash, last4, "moneta", sealed);
   await recordKycAttempt({ userId: input.userId, kind: "bvn_account_match", outcome: "verified", provider: "moneta", providerReference: check.reference });
+  queueAccountOpening(input.userId);
   return getMyVerificationStatus(input.userId);
 }
 
@@ -205,6 +222,7 @@ export async function reviewKyc(input: { userId: string; kind: "bvn" | "nin"; de
   if (input.decision === "approve") {
     await markVerified(input.userId, input.kind, hash, last4, "manual_review");
     await recordKycAttempt({ userId: input.userId, kind: input.kind, outcome: "verified", provider: "manual_review" });
+    queueAccountOpening(input.userId);
   } else {
     await markStatus(input.userId, input.kind, hash, last4, "failed");
     await db.transaction((tx) => syncKycTier(tx, input.userId));

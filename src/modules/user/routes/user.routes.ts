@@ -6,6 +6,11 @@ import { requireAdmin } from "../../../core/middleware/requireAdmin.js";
 import { requirePermission } from "../../../core/middleware/requirePermission.js";
 import { Permissions } from "../../../core/authz/permissions.js";
 import {
+  addSupportMessageHandler,
+  adminGetTicketHandler,
+  adminListTicketsHandler,
+  adminReplyTicketHandler,
+  adminSetTicketStatusHandler,
   createAccountUpdateRequestHandler,
   createSupportTicketHandler,
   listAccountUpdateRequestsHandler,
@@ -20,6 +25,8 @@ import {
   submitMyNinVerificationHandler,
   listBanksHandler,
 } from "../../verification/controller/verification.controller.js";
+
+const supportMessageLimiter = limiter({ windowMs: 10 * 60 * 1000, max: 30, by: "user" });
 
 export const userRoutes = Router();
 
@@ -37,6 +44,7 @@ userRoutes.get(
 );
 userRoutes.post("/support-tickets", authGuard, createSupportTicketHandler);
 userRoutes.get("/support-tickets", authGuard, listSupportTicketsHandler);
+userRoutes.post("/support-tickets/:id/messages", authGuard, supportMessageLimiter, addSupportMessageHandler);
 userRoutes.patch("/reloadly/enable", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_MANAGE_USERS), setReloadlyEnabledHandler);
 
 // Verification endpoints
@@ -57,3 +65,10 @@ userRoutes.post(
   verifyLimiter,
   submitMyNinVerificationHandler,
 );
+
+// Mounted at /admin/support: staff read, answer and resolve customer tickets.
+export const adminSupportRoutes = Router();
+adminSupportRoutes.get("/tickets", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_VIEW_USERS), adminListTicketsHandler);
+adminSupportRoutes.get("/tickets/:id", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_VIEW_USERS), adminGetTicketHandler);
+adminSupportRoutes.post("/tickets/:id/messages", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_MANAGE_USERS), adminReplyTicketHandler);
+adminSupportRoutes.patch("/tickets/:id", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_MANAGE_USERS), adminSetTicketStatusHandler);

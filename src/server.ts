@@ -17,7 +17,7 @@ import { getOpenAPIDocument } from "./core/docs/openapi.js";
 
 import { authRoutes } from "./modules/auth/routes/auth.routes.js";
 import { pinRoutes } from "./modules/auth/routes/pin.routes.js";
-import { userRoutes } from "./modules/user/routes/user.routes.js";
+import { adminSupportRoutes, userRoutes } from "./modules/user/routes/user.routes.js";
 import { walletRoutes } from "./modules/wallet/routes/wallet.routes.js";
 import { billsRoutes, ordersRoutes, telecomRoutes } from "./modules/vtu/vtu.routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes/dashboard.routes.js";
@@ -153,6 +153,7 @@ export function createServer(): Express {
   admin.use("/dashboard", adminDashboardRoutes);
   admin.use("/customers", adminCustomersRoutes);
   admin.use("/banking", adminBankingRoutes);
+  admin.use("/support", adminSupportRoutes);
   api.use("/admin", admin);
 
   app.use("/api/v1", api);

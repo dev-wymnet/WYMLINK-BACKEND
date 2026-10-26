@@ -88,6 +88,8 @@ export const kycProfiles = app.table("kyc_profiles", {
   bvnLast4: text("bvn_last4"),
   bvnStatus: text("bvn_status").notNull().default("none"), // none | pending | verified | failed
   bvnVerifiedAt: ts("bvn_verified_at"),
+  // Encrypted BVN, held only until the Moneta account is opened (0003_kyc_sealed_bvn.sql).
+  bvnSealed: text("bvn_sealed"),
   ninHash: text("nin_hash"),
   ninLast4: text("nin_last4"),
   ninStatus: text("nin_status").notNull().default("none"),

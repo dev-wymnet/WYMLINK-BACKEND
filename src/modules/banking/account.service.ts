@@ -1,12 +1,14 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "../../core/db/client.js";
-import { deposits, tierLimits, users, virtualAccounts, wallets } from "../../core/db/schema.js";
+import { deposits, kycProfiles, tierLimits, users, virtualAccounts, wallets } from "../../core/db/schema.js";
 import { NotFoundError } from "../../core/errors/NotFoundError.js";
 import { ValidationError } from "../../core/errors/ValidationError.js";
 import { logger } from "../../core/logger/logger.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../core/utils/money.js";
-import { matchesVerifiedIdentity } from "../verification/service/verification.service.js";
+import { unseal } from "../../core/utils/seal.js";
+import { getKycProfile } from "../verification/repository/verification.repository.js";
+import { matchesVerifiedBvn, matchesVerifiedIdentity } from "../verification/service/verification.service.js";
 import { findActiveVirtualAccount, getOrCreateWallet, postEntry } from "../wallet/repository/wallet.repository.js";
 import { createVirtualAccount, listCredits, type MonetaCredit } from "../moneta/moneta.partner.js";
 
@@ -38,10 +40,78 @@ export async function getMyVirtualAccount(userId: string) {
   return findActiveVirtualAccount(wallet.id);
 }
 
-// Opens the customer's Moneta account. Moneta needs the BVN in plain digits; Wymlink
-// never stores it, so the customer re-enters BVN and NIN and both must match the numbers
-// staff verified. The BVN is sent to Moneta once and not kept (Moneta takes a NIN
-// placeholder, see createVirtualAccount).
+// Opens the customer's Moneta account (BVN in plain digits; Moneta takes a NIN placeholder,
+// see createVirtualAccount), records it, and drops the encrypted BVN kept for it.
+async function createAndStore(user: typeof users.$inferSelect, walletId: string, bvn: string) {
+  const created = await createVirtualAccount({ firstName: user.firstName, surname: user.lastName, bvn });
+  if (!created.ok) {
+    logger.warn({ userId: user.id, message: created.message }, "moneta_va_create_failed");
+    throw new ValidationError(`We couldn't open your account: ${created.message}`);
+  }
+  const [va] = await db
+    .insert(virtualAccounts)
+    .values({
+      userId: user.id,
+      walletId,
+      provider: "moneta",
+      providerReference: created.reference,
+      accountNumber: created.accountNumber,
+      accountName: created.accountName || `${user.firstName} ${user.lastName}`,
+      bankName: created.bankName || "Providus Bank",
+      raw: created.raw,
+    })
+    .returning();
+  await db.update(kycProfiles).set({ bvnSealed: null }).where(eq(kycProfiles.userId, user.id));
+  logger.info({ userId: user.id }, "moneta_va_opened");
+  return va!;
+}
+
+// Opened automatically once BVN and NIN are verified (called by the KYC review and when
+// the app asks for the account), from the encrypted BVN kept since submission. Quiet
+// no-op when not eligible, already open, or an attempt is running. A failed attempt
+// keeps its lease, so the next automatic try waits for it to end (OPEN_LEASE_SECONDS).
+export async function issueAccountWhenReady(userId: string) {
+  const user = (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
+  if (!user || user.kycTier < 2) return;
+  const wallet = await getOrCreateWallet(user.id);
+  if (await findActiveVirtualAccount(wallet.id)) return;
+  const p = await getKycProfile(user.id);
+  if (!p?.bvnSealed) return;
+  let bvn: string;
+  try {
+    bvn = unseal(p.bvnSealed);
+  } catch {
+    logger.error({ userId }, "va_auto_open_unseal_failed");
+    return;
+  }
+  if (!(await matchesVerifiedBvn(user.id, bvn))) {
+    logger.error({ userId }, "va_auto_open_bvn_mismatch");
+    return;
+  }
+  if (!(await claimOpening(user.id))) return;
+  try {
+    if (!(await findActiveVirtualAccount(wallet.id))) await createAndStore(user, wallet.id, bvn);
+    await releaseOpening(user.id).catch(() => undefined);
+  } catch (err) {
+    logger.warn({ userId, err: (err as Error).message }, "va_auto_open_attempt_failed");
+  }
+}
+
+// Where the customer is on the way to an account number, for the apps:
+// null (they have one) | "verify" (BVN + NIN not both verified) | "opening" (being opened
+// automatically) | "needs_details" (verified before Wymlink kept the BVN: re-enter it once).
+export async function accountSetupState(userId: string): Promise<"verify" | "opening" | "needs_details" | null> {
+  const user = (await db.select({ tier: users.kycTier }).from(users).where(eq(users.id, userId)).limit(1))[0];
+  if (await getMyVirtualAccount(userId)) return null;
+  if (!user || user.tier < 2) return "verify";
+  const p = await getKycProfile(userId);
+  if (!p?.bvnSealed) return "needs_details";
+  void issueAccountWhenReady(userId).catch(() => undefined);
+  return "opening";
+}
+
+// Manual opening, for customers verified before the BVN was kept: they re-enter BVN and
+// NIN, which must match the verified ones.
 export async function openVirtualAccount(input: { userId: string; bvn: string; nin: string }) {
   const user = (await db.select().from(users).where(eq(users.id, input.userId)).limit(1))[0];
   if (!user) throw new NotFoundError("User not found");
@@ -52,7 +122,7 @@ export async function openVirtualAccount(input: { userId: string; bvn: string; n
   if (!(await matchesVerifiedIdentity(user.id, input.bvn, input.nin))) {
     throw new ValidationError(
       user.kycTier < 2
-        ? "Verify your BVN and NIN first. You can get your account number once both are approved."
+        ? "Verify your BVN and NIN first. Your account number is opened as soon as both are approved."
         : "That BVN or NIN doesn't match the ones verified on your account.",
     );
   }
@@ -64,27 +134,7 @@ export async function openVirtualAccount(input: { userId: string; bvn: string; n
   try {
     const again = await findActiveVirtualAccount(wallet.id);
     if (again) return again;
-
-    const created = await createVirtualAccount({ firstName: user.firstName, surname: user.lastName, bvn: input.bvn });
-    if (!created.ok) {
-      logger.warn({ userId: user.id, message: created.message }, "moneta_va_create_failed");
-      throw new ValidationError(`We couldn't open your account: ${created.message}`);
-    }
-    const [va] = await db
-      .insert(virtualAccounts)
-      .values({
-        userId: user.id,
-        walletId: wallet.id,
-        provider: "moneta",
-        providerReference: created.reference,
-        accountNumber: created.accountNumber,
-        accountName: created.accountName || `${user.firstName} ${user.lastName}`,
-        bankName: created.bankName || "Providus Bank",
-        raw: created.raw,
-      })
-      .returning();
-    logger.info({ userId: user.id }, "moneta_va_opened");
-    return va!;
+    return await createAndStore(user, wallet.id, input.bvn);
   } finally {
     await releaseOpening(user.id).catch(() => undefined);
   }

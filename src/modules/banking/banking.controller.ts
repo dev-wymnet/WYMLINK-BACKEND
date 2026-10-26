@@ -6,6 +6,7 @@ import { parseMoneyToCents } from "../../core/utils/money.js";
 import { insertAuditLog } from "../audit/repository/audit.repository.js";
 import { verifyTransactionPin } from "../auth/service/pin.service.js";
 import {
+  accountSetupState,
   getMyVirtualAccount,
   listMyDeposits,
   openVirtualAccount,
@@ -58,8 +59,9 @@ const limitQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).def
 // ---------- Account number & deposits ----------
 
 export const myVirtualAccountHandler = wrap(async (req) => {
-  const va = await getMyVirtualAccount(userOf(req));
-  return { account: va ? toVirtualAccountDto(va) : null };
+  const userId = userOf(req);
+  const va = await getMyVirtualAccount(userId);
+  return { account: va ? toVirtualAccountDto(va) : null, setup: va ? null : await accountSetupState(userId) };
 });
 
 export const openVirtualAccountHandler = wrap(async (req) => {
