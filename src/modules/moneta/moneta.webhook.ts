@@ -23,16 +23,20 @@ const keepHeader = (name: string) => /^(x-|content-type$|user-agent$|signature|a
 const receive: RequestHandler = async (req, res) => {
   const raw = (req as any).rawBody as Buffer | undefined;
   const body = req.body && Object.keys(req.body).length ? req.body : raw ? { raw: raw.toString("utf8").slice(0, 20_000) } : {};
+  // A key is looked up at the top level and under `data`; a dotted key ("payment.reference")
+  // is a path. Moneta's deposit notification (seen live) is
+  // { notification_type, payment: {reference, paid_at, amount_paid, …}, virtualAccount: {reference, account_number, …} }.
   const pick = (...keys: string[]) => {
     for (const k of keys) {
-      const v = body?.[k] ?? body?.data?.[k];
+      const at = (o: any) => k.split(".").reduce((x, part) => x?.[part], o);
+      const v = at(body) ?? at(body?.data);
       if (typeof v === "string" || typeof v === "number") return String(v).slice(0, 200);
     }
     return null;
   };
 
   const eventId =
-    pick("event_id", "eventId", "id", "transaction_reference", "transactionReference", "session_id", "sessionId") ??
+    pick("event_id", "eventId", "id", "transaction_reference", "transactionReference", "session_id", "sessionId", "payment.reference") ??
     createHash("sha256").update(raw ?? JSON.stringify(body)).digest("hex");
   const headers = Object.fromEntries(Object.entries(req.headers).filter(([k]) => keepHeader(k)));
 
@@ -43,7 +47,7 @@ const receive: RequestHandler = async (req, res) => {
         provider: "moneta",
         eventId,
         eventType: pick("event", "event_type", "eventType", "type", "notification_type") ?? "unknown",
-        reference: pick("reference", "transaction_reference", "virtual_account_reference", "account_number"),
+        reference: pick("reference", "transaction_reference", "payment.reference", "virtual_account_reference", "virtualAccount.reference", "account_number"),
         payload: { body, headers, ip: safeIp(req.ip), receivedAt: new Date().toISOString() },
       })
       .onConflictDoNothing({ target: [providerEvents.provider, providerEvents.eventId] });
@@ -58,8 +62,8 @@ const receive: RequestHandler = async (req, res) => {
   // After answering: confirm against Moneta and credit what its history shows.
   void (async () => {
     const va = await findVirtualAccountByProviderRef(
-      pick("virtual_account_reference", "virtualAccountReference", "account_reference"),
-      pick("account_number", "accountNumber", "virtual_account_number", "destination_account_number"),
+      pick("virtual_account_reference", "virtualAccountReference", "account_reference", "virtualAccount.reference"),
+      pick("account_number", "accountNumber", "virtual_account_number", "destination_account_number", "virtualAccount.account_number"),
     );
     if (!va) {
       await db.update(providerEvents).set({ status: "ignored", processedAt: new Date() }).where(and(eq(providerEvents.provider, "moneta"), eq(providerEvents.eventId, eventId)));
