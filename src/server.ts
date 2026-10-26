@@ -18,6 +18,7 @@ import { getOpenAPIDocument } from "./core/docs/openapi.js";
 import { authRoutes } from "./modules/auth/routes/auth.routes.js";
 import { pinRoutes } from "./modules/auth/routes/pin.routes.js";
 import { adminSupportRoutes, userRoutes } from "./modules/user/routes/user.routes.js";
+import { logoRoutes } from "./modules/logos/logos.routes.js";
 import { walletRoutes } from "./modules/wallet/routes/wallet.routes.js";
 import { billsRoutes, ordersRoutes, telecomRoutes } from "./modules/vtu/vtu.routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes/dashboard.routes.js";
@@ -144,6 +145,7 @@ export function createServer(): Express {
   api.use("/training", trainingRoutes);
   api.use("/payouts", payoutRoutes);
   api.use("/webhooks", monetaWebhookRoutes);
+  api.use("/logos", logoRoutes);
 
   const admin = Router();
   admin.use("/auth", adminAuthRoutes);

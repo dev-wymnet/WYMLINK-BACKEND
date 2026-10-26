@@ -55,6 +55,7 @@ COPY --from=deps-prod /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 # SQL migrations applied at start by dist/scripts/migrate.js
 COPY db/migrations ./db/migrations
+COPY public ./public
 COPY package*.json ./
 COPY entrypoint.sh ./entrypoint.sh
 
