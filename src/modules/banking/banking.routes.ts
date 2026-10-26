@@ -11,7 +11,6 @@ import {
   adminResolveTransferHandler,
   banksHandler,
   beneficiariesHandler,
-  checkDepositsHandler,
   createPayoutHandler,
   createTransferHandler,
   findRecipientHandler,
@@ -30,7 +29,6 @@ import {
 const MIN = 60 * 1000;
 // Moneta calls go through a proxy with a monthly request quota: limit per user.
 const openLimiter = limiter({ windowMs: 60 * MIN, max: 5, by: "user" });
-const depositCheckLimiter = limiter({ windowMs: 2 * MIN, max: 1, by: "user" });
 const lookupLimiter = limiter({ windowMs: 5 * MIN, max: 20, by: "user" });
 const payoutLimiter = limiter({ windowMs: 5 * MIN, max: 10, by: "user" });
 const transferLimiter = limiter({ windowMs: 5 * MIN, max: 10, by: "user" });
@@ -40,7 +38,6 @@ const statusLimiter = limiter({ windowMs: MIN, max: 10, by: "user" });
 export const accountRoutes = Router();
 accountRoutes.get("/virtual-account", authGuard, myVirtualAccountHandler);
 accountRoutes.post("/virtual-account", authGuard, openLimiter, openVirtualAccountHandler);
-accountRoutes.post("/deposits/check", authGuard, depositCheckLimiter, checkDepositsHandler);
 accountRoutes.get("/deposits", authGuard, myDepositsHandler);
 
 // Mounted at /payouts. Named routes before "/:id".

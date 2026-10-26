@@ -186,7 +186,8 @@ Flows:
 - **To a bank:** bank list (`GET /payouts/banks`, searchable — 604 banks) → account number → resolved name
   (`validate-account`) → amount + narration → **fee shown** (`quote`) → PIN → status (poll `status/by-reference`).
 - **To a Wymlink user:** phone/email/account number → name shown → amount → PIN (`POST /transfers`).
-- **Add money:** show the account number; an "I've sent it" button → `POST /wallets/deposits/check`.
+- **Add money:** show the account number. Deposits arrive by themselves: reading the wallet (`GET /dashboard/home`,
+  `GET /wallets/me`) checks the account's Moneta balance (at most once a minute) and records new credits. No button.
 
 ---
 
@@ -367,7 +368,6 @@ Each money call takes a client `reference` (8–128 chars of `A-Z a-z 0-9 _ - : 
 **Deposits** (credited automatically when Moneta notifies us; the customer can also ask)
 | Method & path | Response |
 |---|---|
-| `POST /wallets/deposits/check` | `{newDeposits: [Deposit]}` — "I've sent money". **1 per 2 minutes** (proxy quota) |
 | `GET /wallets/deposits?limit=50` | `{deposits: [Deposit]}` |
 
 `Deposit`: `{id, reference, amountPaid, fee, amount (credited = settled), senderName, status: "credited" | "under_review", receivedAt, creditedAt}`.
@@ -507,7 +507,7 @@ recurring payments, sub-accounts, NQR (QR code) payments, merchant onboarding.
 |---|---|
 | `GET /wallets/me` | `accountNumber`, `bankName`, `reservedAccount.accountName` filled once the VA exists |
 | `POST /wallets/virtual-account` | `{bvn, nin}` → `{accountNumber, accountName, bankName}`; needs BVN + NIN verified |
-| `POST /wallets/deposits/check` | "I've sent money" → checks Moneta history once, returns new credits |
+| `GET /dashboard/home`, `GET /wallets/me` | also check the account's Moneta balance (≤ 1/min) and record new deposits (removed: `POST /wallets/deposits/check`) |
 | `GET /payouts/banks` | `{banks:[{code, name}]}` — `code` = Moneta `bank_id` (number as string) |
 | `GET /payouts/validate-account?bankCode=&accountNumber=` | `{accountNumber, accountName, bankCode, bankName}` |
 | `GET /payouts/quote?amount=` | `{amount, fee, total}` |

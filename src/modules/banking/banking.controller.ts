@@ -6,7 +6,6 @@ import { parseMoneyToCents } from "../../core/utils/money.js";
 import { insertAuditLog } from "../audit/repository/audit.repository.js";
 import { verifyTransactionPin } from "../auth/service/pin.service.js";
 import {
-  checkMyDeposits,
   getMyVirtualAccount,
   listMyDeposits,
   openVirtualAccount,
@@ -70,8 +69,6 @@ export const openVirtualAccountHandler = wrap(async (req) => {
   const va = await openVirtualAccount({ userId, bvn: body.bvn, nin: body.nin });
   return { account: toVirtualAccountDto(va) };
 }, 201);
-
-export const checkDepositsHandler = wrap(async (req) => checkMyDeposits(userOf(req)));
 
 export const myDepositsHandler = wrap(async (req) => {
   const q = limitQuery.parse(req.query);
