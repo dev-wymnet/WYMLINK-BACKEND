@@ -1,0 +1,22 @@
+# Render's free plan sleeps the service after ~15 minutes without traffic.
+# Pinging /health every 10 minutes keeps it warm so the app never hits a cold start.
+name: Keep awake
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping health
+        run: |
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -m 60 https://wymlink-backend.onrender.com/api/v1/health) || code=000
+            echo "attempt $i: $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 10
+          done
+          exit 1
