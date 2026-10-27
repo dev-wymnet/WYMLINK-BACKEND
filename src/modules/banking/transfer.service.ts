@@ -8,8 +8,8 @@ import { logger } from "../../core/logger/logger.js";
 import { normalizeEmail, normalizePhone } from "../../core/utils/identity.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../core/utils/money.js";
 import { enforceSpendLimit } from "../compliance/service/limits.service.js";
-import { postEntry } from "../wallet/repository/wallet.repository.js";
-import { transferBetweenAccounts, type MoneyOutcome } from "../moneta/moneta.partner.js";
+import { getOrCreateWallet, postEntry } from "../wallet/repository/wallet.repository.js";
+import { getVirtualAccountBalance, transferBetweenAccounts, type MoneyOutcome } from "../moneta/moneta.partner.js";
 import { getMyVirtualAccount } from "./account.service.js";
 
 export type Transfer = typeof transfers.$inferSelect;
@@ -80,6 +80,7 @@ export async function createTransfer(input: { senderId: string; reference: strin
   const senderVa = await getMyVirtualAccount(input.senderId);
   if (!senderVa) throw new ValidationError("Get your account number first: transfers are sent from it.");
   const to = await findRecipient(input.recipient, input.senderId);
+  await checkMonetaCovers(input.senderId, senderVa.providerReference, input.amountCents);
 
   let t: Transfer;
   try {
@@ -131,6 +132,28 @@ export async function createTransfer(input: { senderId: string; reference: strin
     outcome = { status: "failed", providerReference: null, fee: null, message: (err as Error).message, raw: null };
   }
   return applyOutcome(t, outcome);
+}
+
+// The money really sits in the sender's Moneta account, and Moneta refuses a transfer the
+// account can't cover ("insufficient funds") even when the Wymlink balance can. When the
+// Wymlink balance is enough, read Moneta's balance first: if it's short, stop before any
+// debit and log both numbers so staff can reconcile. If Moneta doesn't answer, carry on:
+// Moneta itself still refuses, and the transfer is refunded.
+async function checkMonetaCovers(userId: string, providerReference: string, amountCents: bigint) {
+  const wallet = await getOrCreateWallet(userId);
+  const ledgerCents = parseMoneyToCents(wallet.availableBalance);
+  if (ledgerCents < amountCents) return; // the ledger debit gives the usual "not enough" answer
+  const onMoneta = await getVirtualAccountBalance(providerReference).catch(() => null);
+  if (onMoneta === null) return;
+  const monetaCents = BigInt(Math.round(onMoneta * 100));
+  if (monetaCents >= amountCents) return;
+  logger.warn(
+    { userId, ledger: centsToMoneyString(ledgerCents), moneta: onMoneta.toFixed(2), amount: centsToMoneyString(amountCents) },
+    "moneta_balance_short",
+  );
+  throw new ValidationError(
+    `Your bank account can only cover ₦${onMoneta.toLocaleString("en-NG", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} right now. Try a smaller amount, or contact support so we can check your balance.`,
+  );
 }
 
 async function applyOutcome(t: Transfer, outcome: MoneyOutcome): Promise<Transfer> {

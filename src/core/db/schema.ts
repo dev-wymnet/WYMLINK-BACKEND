@@ -348,6 +348,22 @@ export const updateSubscribers = app.table("update_subscribers", {
   createdAt: ts("created_at").notNull().defaultNow(),
 });
 
+export const qrCodes = app.table("qr_codes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  token: text("token").notNull(),
+  ownerUserId: uuid("owner_user_id").notNull(),
+  status: text("status").notNull().default("active"),
+  maxAmount: money("max_amount"),
+  expiresAt: ts("expires_at").notNull(),
+  sessionStartedAt: ts("session_started_at").notNull().defaultNow(),
+  receiverUserId: uuid("receiver_user_id"),
+  amount: money("amount"),
+  transferId: uuid("transfer_id"),
+  resultMessage: text("result_message"),
+  usedAt: ts("used_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
 export const transfers = app.table("transfers", {
   id: uuid("id").primaryKey().defaultRandom(),
   reference: text("reference").notNull(),
