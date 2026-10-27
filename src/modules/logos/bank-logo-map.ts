@@ -1,5 +1,7 @@
 // Bank logo lookup, generated from github.com/ichtrojan/nigerian-banks (MIT) via TAPA's map
-// (same Moneta partner bank ids). Files: public/logos/banks/<slug>.png (128 px).
+// (same Moneta partner bank ids). Files: public/logos/banks/<slug>.png (128 px). Where the bank's own
+// website serves a usable icon, the file comes from there (scripts/fetch-bank-logos.mjs, sources in
+// scripts/bank-logo-sources.json).
 // Bank logos are their owners' trademarks, shown only to identify each bank.
 
 // Moneta bank id (GET /payouts/banks `code`) -> logo slug.

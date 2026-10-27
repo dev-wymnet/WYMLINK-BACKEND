@@ -19,7 +19,7 @@ const SERVICES: Record<string, string> = Object.fromEntries(
 );
 
 // Bump when files change, so apps drop their cached copies.
-const VERSION = 1;
+const VERSION = 2;
 
 const files = path.resolve(process.cwd(), "public/logos");
 const prefix = (map: Record<string, string>, dir: string) => Object.fromEntries(Object.entries(map).map(([k, slug]) => [k, `${dir}/${slug}.png`]));
