@@ -341,6 +341,13 @@ export const trainingRegistrations = app.table("training_registrations", {
   createdAt: ts("created_at").notNull().defaultNow(),
 });
 
+export const updateSubscribers = app.table("update_subscribers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull(),
+  source: text("source").notNull().default("website"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
 export const transfers = app.table("transfers", {
   id: uuid("id").primaryKey().defaultRandom(),
   reference: text("reference").notNull(),

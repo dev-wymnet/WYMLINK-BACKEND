@@ -24,6 +24,7 @@ import { billsRoutes, ordersRoutes, telecomRoutes } from "./modules/vtu/vtu.rout
 import { dashboardRoutes } from "./modules/dashboard/routes/dashboard.routes.js";
 import { systemRoutes } from "./modules/system/routes/system.routes.js";
 import { trainingRoutes } from "./modules/training/routes/training.routes.js";
+import { updatesRoutes } from "./modules/updates/updates.routes.js";
 import { accountRoutes, adminBankingRoutes, payoutRoutes, transferRoutes } from "./modules/banking/banking.routes.js";
 import { monetaWebhookRoutes } from "./modules/moneta/moneta.webhook.js";
 import { adminAuthRoutes } from "./modules/admin/auth/routes/adminAuth.routes.js";
@@ -143,6 +144,7 @@ export function createServer(): Express {
   api.use("/dashboard", dashboardRoutes);
   api.use("/system", systemRoutes);
   api.use("/training", trainingRoutes);
+  api.use("/updates", updatesRoutes);
   api.use("/payouts", payoutRoutes);
   api.use("/webhooks", monetaWebhookRoutes);
   api.use("/logos", logoRoutes);
