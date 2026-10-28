@@ -27,6 +27,7 @@ import { trainingRoutes } from "./modules/training/routes/training.routes.js";
 import { updatesRoutes } from "./modules/updates/updates.routes.js";
 import { qrRoutes } from "./modules/qr/qr.routes.js";
 import { accountRoutes, adminBankingRoutes, payoutRoutes, transferRoutes } from "./modules/banking/banking.routes.js";
+import { adminCollectionsRoutes } from "./modules/admin/collections/collections.routes.js";
 import { monetaWebhookRoutes } from "./modules/moneta/moneta.webhook.js";
 import { adminAuthRoutes } from "./modules/admin/auth/routes/adminAuth.routes.js";
 import { adminManagementRoutes } from "./modules/admin/management/routes/admin.routes.js";
@@ -160,6 +161,7 @@ export function createServer(): Express {
   admin.use("/dashboard", adminDashboardRoutes);
   admin.use("/customers", adminCustomersRoutes);
   admin.use("/banking", adminBankingRoutes);
+  admin.use("/collections", adminCollectionsRoutes);
   admin.use("/support", adminSupportRoutes);
   api.use("/admin", admin);
 

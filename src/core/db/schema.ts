@@ -419,3 +419,34 @@ export const transfers = app.table("transfers", {
   updatedAt: ts("updated_at").notNull().defaultNow(),
   completedAt: ts("completed_at"),
 });
+
+export const collectionAccounts = app.table("collection_accounts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  bankCode: text("bank_code").notNull(),
+  bankName: text("bank_name").notNull(),
+  accountNumber: text("account_number").notNull(),
+  accountName: text("account_name").notNull(),
+  active: boolean("active").notNull().default(true),
+  setBy: uuid("set_by"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+export const collections = app.table("collections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  virtualAccountId: uuid("virtual_account_id").notNull(),
+  collectionAccountId: uuid("collection_account_id").notNull(),
+  owedBefore: money("owed_before").notNull(),
+  vaBalanceBefore: money("va_balance_before"),
+  gross: money("gross").notNull(),
+  fee: money("fee").notNull(),
+  sent: money("sent").notNull(),
+  narration: text("narration").notNull(),
+  status: text("status").notNull().default("processing"), // processing | success | failed | unknown
+  providerReference: text("provider_reference"),
+  lastError: text("last_error"),
+  createdBy: uuid("created_by"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+  completedAt: ts("completed_at"),
+});
