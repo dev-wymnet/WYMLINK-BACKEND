@@ -1,6 +1,8 @@
 import bcrypt from "bcrypt";
+import { eq, inArray } from "drizzle-orm";
 
 import { db } from "../../../../core/db/client.js";
+import { adminMfa, users } from "../../../../core/db/schema.js";
 import { ValidationError } from "../../../../core/errors/ValidationError.js";
 import { ForbiddenError } from "../../../../core/errors/ForbiddenError.js";
 import { forgetUserStatus } from "../../../../core/middleware/authGuard.js";
@@ -46,6 +48,7 @@ export async function listAdmins(input: { page: number; limit: number; search?: 
   const limit = Math.min(Math.max(Number(input.limit) || 20, 1), 100);
   const page = Math.max(Number(input.page) || 1, 1);
   const { rows, total } = await repoListAdmins({ limit, offset: (page - 1) * limit, search: input.search });
+  const enrolled = await enrolledIds(rows.map((u) => u.id));
   return {
     data: rows.map((u) => ({
       id: u.id,
@@ -55,6 +58,7 @@ export async function listAdmins(input: { page: number; limit: number; search?: 
       phone: u.phone,
       role: u.role,
       status: u.status,
+      mfaEnrolled: enrolled.has(u.id),
       lastLoginAt: u.lastLoginAt,
       createdAt: u.createdAt,
     })),
@@ -73,10 +77,18 @@ export async function getAdmin(id: string) {
     phone: u.phone,
     role: u.role,
     status: u.status,
+    mfaEnrolled: (await enrolledIds([u.id])).has(u.id),
     lastLoginAt: u.lastLoginAt,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
   };
+}
+
+// Staff with an authenticator app set up for two-step sign-in.
+async function enrolledIds(ids: string[]) {
+  if (!ids.length) return new Set<string>();
+  const rows = await db.select({ userId: adminMfa.userId }).from(adminMfa).where(inArray(adminMfa.userId, ids));
+  return new Set(rows.map((r) => r.userId));
 }
 
 export async function createAdmin(
@@ -95,16 +107,34 @@ export async function createAdmin(
   if (await findContactConflict({ email: input.email, phone: input.phone })) {
     throw new ValidationError("An account with this email or phone already exists");
   }
-  const user = await createUser(db, {
-    firstName: input.firstName,
-    lastName: input.lastName,
-    email: input.email,
-    phone: input.phone ?? null,
-    passwordHash: await bcrypt.hash(input.temporaryPassword, 12),
-    role: input.role,
+  const user = await db.transaction(async (tx) => {
+    const created = await createUser(tx, {
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      phone: input.phone ?? null,
+      passwordHash: await bcrypt.hash(input.temporaryPassword, 12),
+      role: input.role,
+    });
+    // Someone else chose this password: the new staff member replaces it at first sign-in.
+    await tx.update(users).set({ mustChangePassword: true }).where(eq(users.id, created.id));
+    return created;
   });
   await audit(input, "ADMIN_CREATED", user.id, { after: { role: input.role } });
   return { id: user.id };
+}
+
+// For staff who lost their authenticator: they set up a new one at their next sign-in.
+// Not for your own account (use the reset script on the server).
+export async function resetAdminMfa(input: Meta & { targetAdminId: string }) {
+  if (input.actorAdminId === input.targetAdminId) throw new ForbiddenError("You can't reset your own two-step sign-in");
+  const u = await findAdminById(input.targetAdminId);
+  if (!u || !isStaff(u.role)) throw new ValidationError("Admin not found");
+  if (u.role === "super_admin" && input.actorRole !== "super_admin") throw new ForbiddenError("Only super_admin can reset a super_admin");
+  await db.delete(adminMfa).where(eq(adminMfa.userId, u.id));
+  await revokeUserSessions({ userId: u.id, kinds: ["admin"], reason: "mfa_reset" });
+  await audit(input, "ADMIN_MFA_RESET", u.id);
+  return { success: true };
 }
 
 export async function updateAdminStatus(input: Meta & { targetAdminId: string; status: "active" | "disabled" }) {

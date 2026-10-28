@@ -9,6 +9,7 @@ import {
   getAdminHandler,
   listAdminSessionsHandler,
   listAdminsHandler,
+  resetAdminMfaHandler,
   revokeAdminSessionsHandler,
   updateAdminRoleHandler,
   updateAdminStatusHandler,
@@ -70,4 +71,12 @@ adminManagementRoutes.post(
   requireAdmin,
   requirePermission(Permissions.ADMIN_MANAGE_ADMINS),
   revokeAdminSessionsHandler,
+);
+
+adminManagementRoutes.post(
+  "/:id/mfa/reset",
+  authGuard,
+  requireAdmin,
+  requirePermission(Permissions.ADMIN_MANAGE_ADMINS),
+  resetAdminMfaHandler,
 );

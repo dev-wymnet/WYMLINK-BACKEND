@@ -41,6 +41,9 @@ const extraSchema = z.object({
 
   // Shared with the web app's server (BFF) so it can pass the real client IP.
   BFF_SHARED_SECRET: z.string().min(32).optional(),
+
+  // /api-docs and /openapi.json. Default: on everywhere except production.
+  API_DOCS_ENABLED: z.union([z.literal("true"), z.literal("false")]).optional(),
 });
 
 const extra = extraSchema.parse(process.env);
@@ -113,6 +116,8 @@ export const config = {
   TRUST_PROXY_HOPS: extra.TRUST_PROXY_HOPS,
 
   BFF_SHARED_SECRET: extra.BFF_SHARED_SECRET,
+
+  API_DOCS_ENABLED: extra.API_DOCS_ENABLED ? extra.API_DOCS_ENABLED === "true" : baseEnv.NODE_ENV !== "production",
 
   /**
    * Backward compatibility

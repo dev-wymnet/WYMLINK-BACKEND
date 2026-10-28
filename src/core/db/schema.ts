@@ -11,6 +11,7 @@ import {
   numeric,
   jsonb,
   integer,
+  bigint,
   smallint,
   date,
   primaryKey,
@@ -36,6 +37,7 @@ export const users = app.table("users", {
   status: text("status").notNull().default("active"),
   kycTier: smallint("kyc_tier").notNull().default(0),
   reloadlyEnabled: boolean("reloadly_enabled").notNull().default(false),
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   lastLoginAt: ts("last_login_at"),
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
@@ -64,12 +66,43 @@ export const pinAttempts = app.table(
     userId: uuid("user_id").notNull(),
     kind: text("kind").notNull(), // transaction_pin | passcode
     failedAttempts: integer("failed_attempts").notNull().default(0),
+    lockouts: integer("lockouts").notNull().default(0),
     lockedUntil: ts("locked_until"),
     lastFailedAt: ts("last_failed_at"),
     updatedAt: ts("updated_at").notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.kind] })],
 );
+
+// Failed sign-ins per account tried (db/migrations/0007_auth_hardening.sql).
+export const loginAttempts = app.table("login_attempts", {
+  key: text("key").primaryKey(),
+  failedAttempts: integer("failed_attempts").notNull().default(0),
+  lockouts: integer("lockouts").notNull().default(0),
+  lockedUntil: ts("locked_until"),
+  lastFailedAt: ts("last_failed_at"),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+export const adminMfa = app.table("admin_mfa", {
+  userId: uuid("user_id").primaryKey(),
+  secretSealed: text("secret_sealed").notNull(),
+  enrolledAt: ts("enrolled_at").notNull().defaultNow(),
+  lastStep: bigint("last_step", { mode: "number" }),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
+});
+
+export const adminMfaChallenges = app.table("admin_mfa_challenges", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  lockKeys: text("lock_keys").notNull(),
+  enrollSealed: text("enroll_sealed"),
+  attempts: integer("attempts").notNull().default(0),
+  expiresAt: ts("expires_at").notNull(),
+  usedAt: ts("used_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
 
 export const otpCodes = app.table("otp_codes", {
   id: uuid("id").primaryKey().defaultRandom(),

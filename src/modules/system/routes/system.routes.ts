@@ -1,7 +1,7 @@
 import { Router } from "express";
 
 import { authGuard } from "../../../core/middleware/authGuard.js";
-import { requireAdmin } from "../../../core/middleware/requireAdmin.js";
+import { requireAdmin, requireSuperAdmin } from "../../../core/middleware/requireAdmin.js";
 import {
   architectureSummaryHandler,
   debugEnvHandler,
@@ -11,8 +11,8 @@ import {
 
 export const systemRoutes = Router();
 
-// Diagnostics reveal schema, providers and secret fragments: signed-in admins only.
-systemRoutes.get("/architecture", authGuard, requireAdmin, architectureSummaryHandler);
-systemRoutes.get("/debug/env", authGuard, requireAdmin, debugEnvHandler);
-systemRoutes.get("/debug/db", authGuard, requireAdmin, debugDbHandler);
-systemRoutes.get("/debug/readiness", authGuard, requireAdmin, debugReadinessHandler);
+// Diagnostics reveal schema and provider set-up: super admins only.
+systemRoutes.get("/architecture", authGuard, requireAdmin, requireSuperAdmin, architectureSummaryHandler);
+systemRoutes.get("/debug/env", authGuard, requireAdmin, requireSuperAdmin, debugEnvHandler);
+systemRoutes.get("/debug/db", authGuard, requireAdmin, requireSuperAdmin, debugDbHandler);
+systemRoutes.get("/debug/readiness", authGuard, requireAdmin, requireSuperAdmin, debugReadinessHandler);

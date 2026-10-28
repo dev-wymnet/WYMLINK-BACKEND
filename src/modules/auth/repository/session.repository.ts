@@ -1,7 +1,8 @@
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne } from "drizzle-orm";
 
 import { db } from "../../../core/db/client.js";
 import { sessions } from "../../../core/db/schema.js";
+import { forgetSession, forgetUserSessions } from "../../../core/auth/sessionState.js";
 import { safeIp } from "../../../core/utils/identity.js";
 
 export type SessionKind = "web" | "mobile" | "admin";
@@ -40,18 +41,28 @@ export async function touchSession(sessionId: string) {
   await db.update(sessions).set({ lastUsedAt: new Date() }).where(eq(sessions.id, sessionId));
 }
 
+// Revoking also stops the session's access tokens (the auth guard checks the session).
 export async function revokeSession(sessionId: string, reason: string) {
   await db
     .update(sessions)
     .set({ revokedAt: new Date(), revokedReason: reason })
     .where(and(eq(sessions.id, sessionId), isNull(sessions.revokedAt)));
+  forgetSession(sessionId);
 }
 
-export async function revokeUserSessions(input: { userId: string; kinds: SessionKind[]; reason: string }) {
+export async function revokeUserSessions(input: { userId: string; kinds: SessionKind[]; reason: string; exceptSessionId?: string }) {
   await db
     .update(sessions)
     .set({ revokedAt: new Date(), revokedReason: input.reason })
-    .where(and(eq(sessions.userId, input.userId), inArray(sessions.kind, input.kinds), isNull(sessions.revokedAt)));
+    .where(
+      and(
+        eq(sessions.userId, input.userId),
+        inArray(sessions.kind, input.kinds),
+        isNull(sessions.revokedAt),
+        input.exceptSessionId ? ne(sessions.id, input.exceptSessionId) : undefined,
+      ),
+    );
+  forgetUserSessions(input.userId);
 }
 
 export async function listSessionsByUser(userId: string) {

@@ -37,6 +37,10 @@ begin
     execute 'alter default privileges in schema app revoke all on sequences from authenticated';
     execute 'alter default privileges in schema app revoke all on functions from authenticated';
   end if;
+  -- Postgres lets every role (PUBLIC) execute new functions by default; only the backend
+  -- (the owner) should run app.post_entry and friends. Re-run each boot, so functions
+  -- added by later migrations are covered too.
+  execute 'revoke execute on all routines in schema app from public';
 end $$;`;
 
 export async function migrateLatest(): Promise<void> {

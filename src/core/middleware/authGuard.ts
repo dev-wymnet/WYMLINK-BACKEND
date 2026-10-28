@@ -1,13 +1,11 @@
 import type { RequestHandler } from "express";
-import { eq } from "drizzle-orm";
 
 import { UnauthorizedError } from "../errors/UnauthorizedError.js";
 import { AccountInactiveError } from "../errors/AppError.js";
-import { verifyAccessToken } from "../auth/jwt.js";
-import { db } from "../db/client.js";
-import { users } from "../db/schema.js";
+import { verifyAccessToken, type AccessTokenPayload } from "../auth/jwt.js";
+import { forgetUserSessions, noteAdminActivity, sessionState } from "../auth/sessionState.js";
 
-type AuthUser = { id: string; role: string };
+type AuthUser = { id: string; role: string; sessionId: string; sessionKind: string };
 
 declare module "express-serve-static-core" {
   interface Request {
@@ -16,25 +14,16 @@ declare module "express-serve-static-core" {
   }
 }
 
-// A suspended/disabled account must stop working at once, not when its access
-// token expires. Status is cached per instance for a short time so this costs
-// at most one small query per user per STATUS_TTL_MS.
-const STATUS_TTL_MS = 30_000;
-const statusCache = new Map<string, { status: string | null; at: number }>();
-
-async function userStatus(userId: string): Promise<string | null> {
-  const hit = statusCache.get(userId);
-  if (hit && Date.now() - hit.at < STATUS_TTL_MS) return hit.status;
-  const rows = await db.select({ status: users.status }).from(users).where(eq(users.id, userId)).limit(1);
-  const status = rows[0] ? ((rows[0].status as string | null) ?? "active") : null;
-  statusCache.set(userId, { status, at: Date.now() });
-  if (statusCache.size > 50_000) statusCache.clear();
-  return status;
-}
-
 /** Call after changing a user's status so this instance stops honouring it immediately. */
-export const forgetUserStatus = (userId: string) => statusCache.delete(userId);
+export const forgetUserStatus = (userId: string) => forgetUserSessions(userId);
 
+// The same answer for every dead token, so the apps refresh (and, if the session is
+// gone, sign out) the way they do when a token simply expires.
+const deadToken = () => new UnauthorizedError("Invalid or expired access token");
+
+// Every request checks the session behind its token (cached briefly, see sessionState):
+// a signed-out, revoked or expired session, or a suspended account, stops working at
+// once instead of when the access token runs out. The role comes from the database.
 export const authGuard: RequestHandler = async (req, _res, next) => {
   const header = req.headers.authorization;
   if (!header) return next(new UnauthorizedError("Missing Authorization header"));
@@ -42,21 +31,21 @@ export const authGuard: RequestHandler = async (req, _res, next) => {
   const [scheme, token] = header.split(" ");
   if (scheme !== "Bearer" || !token) return next(new UnauthorizedError("Invalid Authorization header"));
 
-  let payload: { sub: string; role: string };
+  let payload: AccessTokenPayload;
   try {
     payload = verifyAccessToken(token);
   } catch {
-    return next(new UnauthorizedError("Invalid or expired access token"));
+    return next(deadToken());
   }
 
   try {
-    const status = await userStatus(payload.sub);
-    if (status === null) return next(new UnauthorizedError("Invalid or expired access token"));
-    if (status !== "active") return next(new AccountInactiveError());
+    const s = await sessionState(payload.sid);
+    if (!s || s.userId !== payload.sub || s.revoked || s.expiresAt <= Date.now()) return next(deadToken());
+    if (s.userStatus !== "active") return next(new AccountInactiveError());
+    if (s.kind === "admin" && !(await noteAdminActivity(payload.sid, s))) return next(deadToken());
+    req.user = { id: payload.sub, role: s.role, sessionId: payload.sid, sessionKind: s.kind };
+    return next();
   } catch (err) {
     return next(err);
   }
-
-  req.user = { id: payload.sub, role: payload.role };
-  return next();
 };

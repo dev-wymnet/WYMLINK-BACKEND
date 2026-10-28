@@ -12,6 +12,7 @@ import {
   getAdmin,
   listAdminSessions,
   listAdmins,
+  resetAdminMfa,
   revokeAdminSessions,
   updateAdminRole,
   updateAdminStatus,
@@ -161,6 +162,23 @@ export const revokeAdminSessionsHandler: RequestHandler = async (
       ...(typeof req.headers["user-agent"] === "string"
         ? { userAgent: req.headers["user-agent"] }
         : {}),
+      ...((req as any).id ? { requestId: (req as any).id } : {}),
+    });
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const resetAdminMfaHandler: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const result = await resetAdminMfa({
+      actorAdminId: req.user.id,
+      actorRole: (req as any).admin?.role ?? "",
+      targetAdminId: String(req.params.id),
+      ...(req.ip ? { ip: req.ip } : {}),
+      ...(typeof req.headers["user-agent"] === "string" ? { userAgent: req.headers["user-agent"] } : {}),
       ...((req as any).id ? { requestId: (req as any).id } : {}),
     });
     res.status(200).json(result);

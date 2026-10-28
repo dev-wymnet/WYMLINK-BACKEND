@@ -45,10 +45,13 @@ async function ensureNotLocked(userId: string, kind: PinKind) {
   throw new PasscodeLockedError(until);
 }
 
-// One atomic upsert: the count can't be raced past the limit.
+// One atomic upsert: the count can't be raced past the limit. Each lockout in a row
+// doubles the next (up to 256x, about a day for the PIN; forgotten after a day without
+// failures), so a 4-digit PIN can't be worked through 5 guesses every few minutes.
 async function registerFailure(userId: string, kind: PinKind) {
   const { max, lockSeconds } = policy(kind);
   const next = sql`${pinAttempts.failedAttempts} + 1`;
+  const streak = sql`(case when ${pinAttempts.lastFailedAt} > now() - interval '24 hours' then ${pinAttempts.lockouts} else 0 end)`;
   await db
     .insert(pinAttempts)
     .values({ userId, kind, failedAttempts: 1, lastFailedAt: new Date() })
@@ -56,7 +59,8 @@ async function registerFailure(userId: string, kind: PinKind) {
       target: [pinAttempts.userId, pinAttempts.kind],
       set: {
         failedAttempts: sql`case when ${next} >= ${max} then 0 else ${next} end`,
-        lockedUntil: sql`case when ${next} >= ${max} then now() + make_interval(secs => ${lockSeconds}) else ${pinAttempts.lockedUntil} end`,
+        lockouts: sql`case when ${next} >= ${max} then ${streak} + 1 else ${streak} end`,
+        lockedUntil: sql`case when ${next} >= ${max} then now() + make_interval(secs => ${lockSeconds} * power(2, least(${streak}, 8))) else ${pinAttempts.lockedUntil} end`,
         lastFailedAt: new Date(),
       },
     });
@@ -65,7 +69,7 @@ async function registerFailure(userId: string, kind: PinKind) {
 async function clearFailures(userId: string, kind: PinKind) {
   await db
     .update(pinAttempts)
-    .set({ failedAttempts: 0, lockedUntil: null })
+    .set({ failedAttempts: 0, lockouts: 0, lockedUntil: null })
     .where(and(eq(pinAttempts.userId, userId), eq(pinAttempts.kind, kind)));
 }
 

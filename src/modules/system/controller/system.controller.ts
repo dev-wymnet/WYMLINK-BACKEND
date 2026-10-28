@@ -11,16 +11,8 @@ export const architectureSummaryHandler: RequestHandler = async (_req, res) => {
   res.status(200).json(summary);
 };
 
+// Whether settings are present, never any part of a secret.
 export const debugEnvHandler: RequestHandler = async (_req, res) => {
-  const redact = (value: string | undefined | null) => {
-    if (!value) return { present: false };
-    if (value.length <= 8) return { present: true, value: "***" };
-    return {
-      present: true,
-      value: `${value.slice(0, 4)}***${value.slice(-4)}`,
-    };
-  };
-
   res.status(200).json({
     nodeEnv: env.NODE_ENV,
     processRole: env.PROCESS_ROLE,
@@ -29,7 +21,7 @@ export const debugEnvHandler: RequestHandler = async (_req, res) => {
       present: Boolean(env.DATABASE_URL),
     },
     jwt: {
-      accessSecret: redact(env.JWT_ACCESS_SECRET),
+      accessSecret: { present: Boolean(env.JWT_ACCESS_SECRET) },
     },
   });
 };

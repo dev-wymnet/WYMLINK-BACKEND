@@ -30,6 +30,7 @@ import {
 } from "../repository/session.repository.js";
 import { getOrCreateWallet } from "../../wallet/repository/wallet.repository.js";
 import { consumeOtp, issueOtp, quietly } from "./otp.service.js";
+import { assertLoginAllowed, clearLoginFailures, loginKeys, registerLoginFailure } from "./loginLock.service.js";
 
 // bcrypt hash of a random throwaway string, used to equalise login timing.
 const DUMMY_HASH = bcrypt.hashSync(randomToken(16), 12);
@@ -91,19 +92,24 @@ export async function login(
   ctx: ClientContext = {},
 ) {
   const user = await findUserByEmailOrPhone({ email: input.email, phone: input.phone });
+  const keys = loginKeys("customer", { email: input.email, phone: input.phone, userId: user?.id });
+  await assertLoginAllowed("customer", keys);
   if (!user) {
     // Spend the same time as a real check so response timing doesn't reveal which accounts exist.
     await bcrypt.compare(input.password, DUMMY_HASH);
+    await registerLoginFailure("customer", keys);
     throw new UnauthorizedError("Invalid credentials");
   }
 
   if (!(await bcrypt.compare(input.password, user.passwordHash))) {
+    await registerLoginFailure("customer", keys);
     throw new UnauthorizedError("Invalid credentials");
   }
   if (user.status !== "active") throw new AccountInactiveError();
   // Staff accounts sign in through the admin console only.
   if (user.role !== "customer") throw new UnauthorizedError("Invalid credentials");
 
+  await clearLoginFailures(keys);
   await touchLastLogin(user.id);
   logger.info({ userId: user.id }, "auth_login");
   return issueTokens({ userId: user.id, role: user.role }, ctx);
@@ -111,8 +117,9 @@ export async function login(
 
 export async function issueTokens(
   input: { userId: string; role: string },
-  ctx: ClientContext & { kind?: SessionKind; refreshTtlSeconds?: number } = {},
+  ctx: ClientContext & { kind?: SessionKind; refreshTtlSeconds?: number; accessTtlSeconds?: number } = {},
 ) {
+  const accessTtl = ctx.accessTtlSeconds ?? env.JWT_ACCESS_TTL_SECONDS;
   const rawRefreshToken = randomToken(32);
   const kind = ctx.kind ?? (ctx.client === "mobile" ? "mobile" : "web");
   // Phones keep a longer session: the app asks for its passcode on every open.
@@ -129,9 +136,9 @@ export async function issueTokens(
 
   return {
     user: { id: input.userId, role: input.role },
-    accessToken: signAccessToken({ sub: input.userId, role: input.role }),
+    accessToken: signAccessToken({ sub: input.userId, role: input.role, sid: session.id }, accessTtl),
     refreshToken: `${session.id}.${rawRefreshToken}`,
-    accessTokenExpiresInSeconds: env.JWT_ACCESS_TTL_SECONDS,
+    accessTokenExpiresInSeconds: accessTtl,
     refreshTokenExpiresInSeconds: refreshTtl,
   };
 }
@@ -161,7 +168,7 @@ export async function refreshAccessToken(input: { refreshToken: string }) {
   await touchSession(session.id);
   logger.info({ userId: session.userId, sessionId: session.id }, "auth_refresh");
   return {
-    accessToken: signAccessToken({ sub: session.userId, role: user.role }),
+    accessToken: signAccessToken({ sub: session.userId, role: user.role, sid: session.id }),
     accessTokenExpiresInSeconds: env.JWT_ACCESS_TTL_SECONDS,
   };
 }
@@ -201,7 +208,8 @@ export async function resetPasswordWithOtp(input: { email: string; code: string;
   const passwordHash = await bcrypt.hash(input.newPassword, 12);
   await db.update(users).set({ passwordHash }).where(eq(users.id, user.id));
 
-  // A password reset signs out every device.
+  // A password reset signs out every device and lifts a sign-in lockout.
   await revokeUserSessions({ userId: user.id, kinds: CUSTOMER_SESSION_KINDS, reason: "password_reset" });
+  await clearLoginFailures(loginKeys("customer", { email: user.email, phone: user.phone ?? undefined, userId: user.id }));
   logger.info({ userId: user.id }, "auth_password_reset_sessions_revoked");
 }

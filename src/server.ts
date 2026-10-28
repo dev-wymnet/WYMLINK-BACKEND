@@ -65,32 +65,30 @@ export function createServer(): Express {
     }),
   );
 
+  // Request logs carry no headers (bearer tokens, the BFF secret, cookies) and no query
+  // strings; the IP is the one rate limits use (req.ip), not a client-supplied header.
+  const pathOnly = (url: string | undefined) => String(url ?? "").split("?")[0];
   app.use(
     pinoHttp({
       logger,
       genReqId: (req) =>
         (req.headers["x-request-id"] as string | undefined) || randomUUID(),
-      customProps: (req, res) => {
-        const xfwd =
-          (req.headers["x-forwarded-for"] as string | undefined) || "";
-        const ip = xfwd.split(",")[0]?.trim() || (req as any).ip;
-        return {
-          service: config.SERVICE_NAME,
-          env: config.NODE_ENV,
-          requestId: (req as any).id,
-          userId: (req as any).user?.id,
-          path: req.url,
-          method: req.method,
-          statusCode: res.statusCode,
-          responseTime: (res as any).responseTime,
-          ip,
-          userAgent: req.headers["user-agent"],
-        };
+      serializers: {
+        req: (req: any) => ({ id: req.id, method: req.method, url: pathOnly(req.url) }),
+        res: (res: any) => ({ statusCode: res.statusCode }),
       },
-      redact: {
-        paths: ["req.headers.authorization"],
-        remove: true,
-      },
+      customProps: (req, res) => ({
+        service: config.SERVICE_NAME,
+        env: config.NODE_ENV,
+        requestId: (req as any).id,
+        userId: (req as any).user?.id,
+        path: pathOnly(req.url),
+        method: req.method,
+        statusCode: res.statusCode,
+        responseTime: (res as any).responseTime,
+        ip: (req as any).ip,
+        userAgent: req.headers["user-agent"],
+      }),
     }),
   );
 
@@ -112,26 +110,29 @@ export function createServer(): Express {
     res.status(status).json(readiness);
   });
 
-  // OpenAPI documentation endpoints
-  const openapi = getOpenAPIDocument();
-  api.get("/openapi.json", (_req, res) => {
-    res.status(200).json(openapi);
-  });
-  api.use(
-    "/api-docs",
-    helmet({
-      // Swagger UI renders via an inline <script> block, which the strict
-      // default CSP (script-src 'self') blocks. Relax it for docs only.
-      contentSecurityPolicy: {
-        directives: {
-          "script-src": ["'self'", "'unsafe-inline'"],
-          "upgrade-insecure-requests": null,
+  // OpenAPI documentation: a map of every endpoint, so off in production unless
+  // API_DOCS_ENABLED=true.
+  if (config.API_DOCS_ENABLED) {
+    const openapi = getOpenAPIDocument();
+    api.get("/openapi.json", (_req, res) => {
+      res.status(200).json(openapi);
+    });
+    api.use(
+      "/api-docs",
+      helmet({
+        // Swagger UI renders via an inline <script> block, which the strict
+        // default CSP (script-src 'self') blocks. Relax it for docs only.
+        contentSecurityPolicy: {
+          directives: {
+            "script-src": ["'self'", "'unsafe-inline'"],
+            "upgrade-insecure-requests": null,
+          },
         },
-      },
-    }),
-    swaggerUi.serve,
-    swaggerUi.setup(openapi),
-  );
+      }),
+      swaggerUi.serve,
+      swaggerUi.setup(openapi),
+    );
+  }
 
   api.use("/auth", authRoutes);
   api.use("/auth/pin", pinRoutes);
@@ -165,9 +166,11 @@ export function createServer(): Express {
   app.use("/api/v1", api);
 
   // Convenience redirect so /api-docs works without the version prefix
-  app.get(["/api-docs", "/docs"], (_req, res) => {
-    res.redirect("/api/v1/api-docs");
-  });
+  if (config.API_DOCS_ENABLED) {
+    app.get(["/api-docs", "/docs"], (_req, res) => {
+      res.redirect("/api/v1/api-docs");
+    });
+  }
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -2,17 +2,54 @@ import type { RequestHandler } from "express";
 import { getRolePermissions } from "../../../../core/authz/permissions.js";
 
 import {
+  adminChangePasswordSchema,
   adminLoginSchema,
   adminLogoutSchema,
+  adminMfaSchema,
   adminRefreshSchema,
 } from "../types/adminAuth.dto.js";
 import {
+  adminChangePassword,
   adminLogin,
   adminLogout,
   adminRefresh,
   adminMe,
+  adminVerifyMfa,
 } from "../service/adminAuth.service.js";
-import { requireAdmin } from "../../../../core/middleware/requireAdmin.js";
+import { UnauthorizedError } from "../../../../core/errors/UnauthorizedError.js";
+
+const meta = (req: Parameters<RequestHandler>[0]) => ({
+  ...(req.ip ? { ip: req.ip } : {}),
+  ...(req.headers["user-agent"] ? { userAgent: req.headers["user-agent"] as string } : {}),
+  ...((req as any).id ? { requestId: (req as any).id } : {}),
+});
+
+export const adminMfaHandler: RequestHandler = async (req, res, next) => {
+  try {
+    const dto = adminMfaSchema.parse(req.body);
+    res.status(200).json(await adminVerifyMfa({ mfaToken: dto.mfaToken, code: dto.code, ...meta(req) }));
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const adminChangePasswordHandler: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const dto = adminChangePasswordSchema.parse(req.body);
+    res.status(200).json(
+      await adminChangePassword({
+        userId: req.user.id,
+        sessionId: req.user.sessionId,
+        currentPassword: dto.currentPassword,
+        newPassword: dto.newPassword,
+        ...meta(req),
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
+};
 
 export const adminLoginHandler: RequestHandler = async (req, res, next) => {
   try {

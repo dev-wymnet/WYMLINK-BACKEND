@@ -20,11 +20,14 @@ export function limiter(input: {
   // ip (default) | user (signed-in user, else ip) | ip+identity (ip and the email/phone tried)
   // | session (the refresh token's session, else ip)
   by?: "ip" | "user" | "ip+identity" | "session";
+  // Count only refused requests (status >= 400), e.g. wrong passwords.
+  failuresOnly?: boolean;
 }) {
   const by = input.by ?? "ip";
   return rateLimit({
     windowMs: input.windowMs,
     max: input.max,
+    skipSuccessfulRequests: input.failuresOnly ?? false,
     standardHeaders: true,
     legacyHeaders: false,
     message: tooMany,

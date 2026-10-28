@@ -23,9 +23,9 @@ const resetLimiter = limiter({ windowMs: 15 * 60 * 1000, max: 10, by: "ip+identi
 pinRoutes.get("/status", authGuard, pinStatusHandler);
 
 // Protected endpoints for setting and changing PIN
-pinRoutes.post("/transaction/set", authGuard, setTxPinHandler);
+pinRoutes.post("/transaction/set", authGuard, pinLimiter, setTxPinHandler);
 pinRoutes.post("/transaction/change", authGuard, pinLimiter, changeTxPinHandler);
-pinRoutes.post("/passcode/set", authGuard, setPasscodeHandler);
+pinRoutes.post("/passcode/set", authGuard, pinLimiter, setPasscodeHandler);
 pinRoutes.post("/passcode/verify", authGuard, pinLimiter, verifyPasscodeHandler);
 pinRoutes.post("/passcode/change", authGuard, pinLimiter, changePasscodeHandler);
 

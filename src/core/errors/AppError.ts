@@ -119,3 +119,24 @@ export class ServiceUnavailableError extends AppError {
     this.name = "ServiceUnavailableError";
   }
 }
+
+// 429 (not 401): a locked account is not a wrong password, and the apps show the message.
+export class LoginLockedError extends AppError {
+  constructor(lockedUntil: Date, canResetPassword: boolean) {
+    const minutes = Math.max(1, Math.ceil((lockedUntil.getTime() - Date.now()) / 60_000));
+    const wait = `Try again in ${minutes} minute${minutes === 1 ? "" : "s"}`;
+    super(`Too many failed sign-in attempts. ${canResetPassword ? `${wait}, or reset your password.` : `${wait}.`}`, {
+      statusCode: 429,
+      code: "LOGIN_LOCKED",
+      details: { lockedUntil: lockedUntil.toISOString() },
+    });
+    this.name = "LoginLockedError";
+  }
+}
+
+export class PasswordChangeRequiredError extends AppError {
+  constructor(message = "Set a new password before you continue.") {
+    super(message, { statusCode: 403, code: "PASSWORD_CHANGE_REQUIRED" });
+    this.name = "PasswordChangeRequiredError";
+  }
+}

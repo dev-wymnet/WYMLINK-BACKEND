@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+import nodemailer, { type Transporter } from "nodemailer";
 
 import { config } from "../../core/config/index.js";
 import { logger } from "../logger/logger.js";
@@ -15,7 +15,7 @@ export type SendEmailInput = {
 const configured = Boolean(config.SMTP_HOST && config.SMTP_FROM);
 const secure = process.env.SMTP_SECURE ? config.SMTP_SECURE : config.SMTP_PORT === 465;
 
-let transporter: nodemailer.Transporter | null = null;
+let transporter: Transporter | null = null;
 
 function getTransporter() {
   transporter ??= nodemailer.createTransport({

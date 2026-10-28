@@ -24,7 +24,8 @@
     "db:clean": "docker-compose down -v --remove-orphans",
     "dev:stop": "npm run db:down",
     "migrate:prod": "node dist/scripts/migrate.js",
-    "admin:create": "tsx src/scripts/createSuperAdmin.ts"
+    "admin:create": "tsx src/scripts/createSuperAdmin.ts",
+    "admin:reset-mfa": "tsx src/scripts/resetAdminMfa.ts"
   },
   "keywords": [],
   "author": "",
@@ -40,7 +41,7 @@
     "express-rate-limit": "^7.3.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^10.2.1",
     "pg": "^8.20.0",
     "pino": "^9.9.0",
     "pino-http": "^10.5.0",
