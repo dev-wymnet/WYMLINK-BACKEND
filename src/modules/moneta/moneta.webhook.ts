@@ -8,8 +8,6 @@ import { logger } from "../../core/logger/logger.js";
 import { limiter } from "../../core/middleware/rateLimits.js";
 import { safeIp } from "../../core/utils/identity.js";
 import { findVirtualAccountByProviderRef, syncDeposits } from "../banking/account.service.js";
-import { inspectVirtualAccount } from "./moneta.partner.js";
-import { proxyExitIps, recentNetworkErrors } from "./moneta.http.js";
 
 // Moneta payment notifications (deposits into customers' virtual accounts).
 //
@@ -70,13 +68,6 @@ const receive: RequestHandler = async (req, res) => {
     if (!va) {
       await db.update(providerEvents).set({ status: "ignored", processedAt: new Date() }).where(and(eq(providerEvents.provider, "moneta"), eq(providerEvents.eventId, eventId)));
       return;
-    }
-    // TEMPORARY (deposit tracing): a diagnostic_check notification stores Moneta's raw balance
-    // and history replies on its own event row. Nothing is returned to the caller.
-    if (pick("notification_type") === "diagnostic_check") {
-      const seen = await inspectVirtualAccount(va.providerReference, 3).catch((e) => ({ error: String((e as Error).message), network: recentNetworkErrors, exit: null as unknown }));
-      if ("error" in seen) seen.exit = await proxyExitIps().catch((e) => String(e));
-      await db.update(providerEvents).set({ payload: sql`${providerEvents.payload} || ${JSON.stringify({ moneta: seen })}::jsonb` }).where(and(eq(providerEvents.provider, "moneta"), eq(providerEvents.eventId, eventId)));
     }
     const fresh = await syncDeposits(va);
     await db.update(providerEvents).set({ status: "processed", processedAt: new Date() }).where(and(eq(providerEvents.provider, "moneta"), eq(providerEvents.eventId, eventId)));
