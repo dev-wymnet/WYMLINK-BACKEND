@@ -37,6 +37,8 @@ export class MonetaError extends AppError {
 
 const UNREACHABLE = "We couldn't reach the bank network. Please try again in a few minutes.";
 
+export let lastNetworkError: Record<string, unknown> | null = null;
+
 export type MonetaResponse = { status: number; json: any };
 
 // The proxy (Fixie) load-balances across two static IPs, but Moneta whitelists
@@ -69,6 +71,9 @@ async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }
       { path: new URL(url).pathname, name: e.name, message: e.message?.slice(0, 200), code: e.code ?? e.cause?.code, cause: e.cause?.message?.slice(0, 200) },
       /proxy/i.test(`${e.message} ${e.cause?.message}`) ? "moneta_proxy_refused" : "moneta_unreachable",
     );
+    // Kept for the deposit-tracing diagnostic; anything URL-like is cut so no credentials leak.
+    const scrub = (v?: string) => v?.replace(/\w+:\/\/\S+/g, "<url>").slice(0, 200);
+    lastNetworkError = { at: new Date().toISOString(), name: e.name, message: scrub(e.message), code: e.code ?? e.cause?.code, cause: scrub(e.cause?.message) };
     dropTunnel();
     throw new MonetaError(UNREACHABLE, 502, null);
   }
