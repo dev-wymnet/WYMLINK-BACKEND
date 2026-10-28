@@ -132,6 +132,16 @@ export async function getVirtualAccountBalance(reference: string) {
   return ok(r) ? monetaAmount(r.json?.data?.balance) : null;
 }
 
+// Diagnostics: Moneta's raw answers for one VA's balance and recent history (read-only).
+export async function inspectVirtualAccount(reference: string, days: number) {
+  const qs = new URLSearchParams({ virtual_account_reference: reference, fromDate: ymd(new Date(Date.now() - days * 86_400_000)), toDate: ymd(new Date(Date.now() + 86_400_000)) });
+  const [balance, history] = await Promise.all([
+    call("GET", `/partner/virtual-accounts/account-balance?${new URLSearchParams({ virtual_account_reference: reference })}`),
+    call("GET", `/partner/virtual-accounts/transaction-histories?${qs}`),
+  ]);
+  return { balance: { http: balance.status, body: balance.json }, history: { http: history.status, body: history.json } };
+}
+
 export type MonetaCredit = {
   reference: string;
   virtualAccountReference: string | null;

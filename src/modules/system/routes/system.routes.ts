@@ -7,6 +7,7 @@ import {
   debugEnvHandler,
   debugDbHandler,
   debugReadinessHandler,
+  debugMonetaAccountHandler,
 } from "../controller/system.controller.js";
 
 export const systemRoutes = Router();
@@ -16,3 +17,4 @@ systemRoutes.get("/architecture", authGuard, requireAdmin, requireSuperAdmin, ar
 systemRoutes.get("/debug/env", authGuard, requireAdmin, requireSuperAdmin, debugEnvHandler);
 systemRoutes.get("/debug/db", authGuard, requireAdmin, requireSuperAdmin, debugDbHandler);
 systemRoutes.get("/debug/readiness", authGuard, requireAdmin, requireSuperAdmin, debugReadinessHandler);
+systemRoutes.get("/debug/moneta-account/:accountNumber", authGuard, requireAdmin, requireSuperAdmin, debugMonetaAccountHandler);
