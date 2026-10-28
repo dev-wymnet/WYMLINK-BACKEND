@@ -23,7 +23,8 @@ let dispatcher = newDispatcher();
 function dropTunnel() {
   const bad = dispatcher;
   dispatcher = newDispatcher();
-  void bad?.destroy().catch(() => undefined);
+  // close(), not destroy(): requests already on the old tunnel finish instead of failing.
+  void bad?.close().catch(() => undefined);
 }
 
 // An AppError, so the apps get its message (not a bare 500). 502, not 503: the apps
@@ -37,7 +38,7 @@ export class MonetaError extends AppError {
 
 const UNREACHABLE = "We couldn't reach the bank network. Please try again in a few minutes.";
 
-export let lastNetworkError: Record<string, unknown> | null = null;
+export const recentNetworkErrors: Array<Record<string, unknown>> = [];
 
 export type MonetaResponse = { status: number; json: any };
 
@@ -73,7 +74,7 @@ async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }
     );
     // Kept for the deposit-tracing diagnostic; anything URL-like is cut so no credentials leak.
     const scrub = (v?: string) => v?.replace(/\w+:\/\/\S+/g, "<url>").slice(0, 200);
-    lastNetworkError = { at: new Date().toISOString(), name: e.name, message: scrub(e.message), code: e.code ?? e.cause?.code, cause: scrub(e.cause?.message) };
+    if (recentNetworkErrors.push({ path: new URL(url).pathname, at: new Date().toISOString(), name: e.name, message: scrub(e.message), code: e.code ?? e.cause?.code, cause: scrub(e.cause?.message) }) > 10) recentNetworkErrors.shift();
     dropTunnel();
     throw new MonetaError(UNREACHABLE, 502, null);
   }
