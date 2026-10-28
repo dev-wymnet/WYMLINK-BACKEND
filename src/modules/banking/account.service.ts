@@ -230,6 +230,7 @@ async function creditDeposit(tx: Parameters<Parameters<typeof db.transaction>[0]
 export async function syncDeposits(va: VirtualAccount) {
   const from = new Date(Math.max(va.createdAt.getTime() - 86_400_000, Date.now() - 30 * 86_400_000));
   const credits = await listCredits(va.providerReference, from, new Date(Date.now() + 86_400_000));
+  logger.info({ userId: va.userId, seen: credits.length }, "moneta_history_read");
   const fresh: Deposit[] = [];
   for (const c of credits) {
     const d = await recordCredit(va, c);
@@ -253,10 +254,9 @@ export async function checkForDeposits(userId: string) {
   if (lastDepositCheck.size > 50_000) lastDepositCheck.clear();
   const va = await getMyVirtualAccount(userId);
   if (!va) return;
+  const started = Date.now();
   const sync = syncDeposits(va)
-    .then((fresh) => {
-      if (fresh.length) logger.info({ userId, credited: fresh.length }, "deposits_found_on_check");
-    })
+    .then((fresh) => logger.info({ userId, credited: fresh.length, ms: Date.now() - started }, "deposit_check_done"))
     .catch((err) => logger.warn({ userId, err: (err as Error).message }, "deposit_check_failed"));
   await Promise.race([sync, new Promise((r) => setTimeout(r, DEPOSIT_CHECK_WAIT_MS))]);
 }
