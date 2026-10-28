@@ -1,3 +1,4 @@
+import { resolve4 } from "node:dns/promises";
 import { ProxyAgent, fetch, type RequestInit } from "undici";
 import { eq, sql } from "drizzle-orm";
 
@@ -14,18 +15,62 @@ import { logger } from "../../core/logger/logger.js";
 // long-lived tunnel. A tunnel that exits from the IP Moneta doesn't whitelist is thrown
 // away on the first rejection (dropTunnel) and a new one is opened; a tunnel that works
 // is kept, so later calls leave from the whitelisted IP without spending more requests.
+//
+// Pinning the proxy server: the proxy host (e.g. ventoux.usefixie.com) is several entry
+// servers, and each entry server always exits from the SAME public IP (checked 28 Oct:
+// 52.215.137.118 → 54.217.142.99, 34.250.212.67 → 54.195.3.54). So tunnels are opened to
+// one entry server by IP; when Moneta refuses its exit IP, the next entry server is tried
+// and the one that works is kept. Every later call then leaves from the whitelisted IP.
 const proxyUrl = env.MONETA_PROXY_URL || env.MONETA_PROXY;
+const proxyBase = proxyUrl ? new URL(proxyUrl) : null;
 const TUNNEL_KEEP_MS = 10 * 60_000;
-const newDispatcher = () =>
-  proxyUrl ? new ProxyAgent({ uri: proxyUrl, connections: 1, keepAliveTimeout: TUNNEL_KEEP_MS, keepAliveMaxTimeout: TUNNEL_KEEP_MS }) : undefined;
-let dispatcher = newDispatcher();
+const ENTRIES_TTL_MS = 60 * 60_000;
+let entries: { hosts: string[]; at: number } | null = null;
+let entryIndex = 0;
 
-function dropTunnel() {
+async function entryHosts(): Promise<string[]> {
+  if (!proxyBase) return [];
+  const host = proxyBase.hostname;
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) return [host];
+  if (entries && Date.now() - entries.at < ENTRIES_TTL_MS) return entries.hosts;
+  try {
+    const hosts = (await resolve4(host)).sort();
+    if (hosts.length) entries = { hosts, at: Date.now() };
+  } catch (err) {
+    logger.warn({ err: (err as Error).message }, "moneta_proxy_dns_failed");
+  }
+  return entries?.hosts ?? [host];
+}
+
+function agentFor(host: string | undefined) {
+  if (!proxyBase || !host) return undefined;
+  const u = new URL(proxyBase.toString());
+  u.hostname = host;
+  return new ProxyAgent({ uri: u.toString(), connections: 1, keepAliveTimeout: TUNNEL_KEEP_MS, keepAliveMaxTimeout: TUNNEL_KEEP_MS });
+}
+
+let dispatcher: ProxyAgent | undefined;
+async function currentDispatcher() {
+  if (!proxyBase) return undefined;
+  if (!dispatcher) {
+    const hosts = await entryHosts();
+    dispatcher = agentFor(hosts[entryIndex % hosts.length]);
+  }
+  return dispatcher;
+}
+
+// `switchEntry`: the exit IP was refused, so move to the next entry server.
+function dropTunnel(switchEntry = false) {
+  if (switchEntry) {
+    entryIndex++;
+    logger.warn({ entryIndex }, "moneta_proxy_switch_entry");
+  }
   const bad = dispatcher;
-  dispatcher = newDispatcher();
+  dispatcher = undefined;
   // close(), not destroy(): requests already on the old tunnel finish instead of failing.
   void bad?.close().catch(() => undefined);
 }
+
 
 // An AppError, so the apps get its message (not a bare 500). 502, not 503: the apps
 // read 503 as "this feature isn't live yet".
@@ -56,10 +101,11 @@ async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }
   const { timeoutMs: _t, ...rest } = init;
   let res: Awaited<ReturnType<typeof fetch>>;
   let text: string;
+  const d = await currentDispatcher();
   try {
     res = await fetch(url, {
       ...rest,
-      ...(dispatcher ? { dispatcher } : {}),
+      ...(d ? { dispatcher: d } : {}),
       signal: AbortSignal.timeout(init.timeoutMs ?? 45_000),
     });
     text = await res.text();
@@ -90,10 +136,11 @@ export async function monetaFetch(url: string, init: RequestInit & { timeoutMs?:
   let r = await fetchOnce(url, init);
   for (let i = 1; i < IP_RETRIES && isIpReject(r.json); i++) {
     logger.info({ attempt: i }, "moneta_ip_not_whitelisted_retry");
-    dropTunnel(); // this tunnel exits from the wrong IP: never reuse it
+    dropTunnel(true); // this entry server exits from the wrong IP: move to the next one
     r = await fetchOnce(url, init);
   }
   if (isIpReject(r.json)) {
+    if (recentNetworkErrors.push({ path: new URL(url).pathname, at: new Date().toISOString(), rejected: JSON.stringify(r.json).slice(0, 400) }) > 10) recentNetworkErrors.shift();
     dropTunnel();
     throw new MonetaError("Moneta is temporarily unreachable. Please try again shortly.", 503, null);
   }
@@ -183,3 +230,22 @@ export const looksLikeTokenRejection = (r: MonetaResponse) =>
   /unauthori[sz]ed|invalid[^"]{0,20}token|token[^"]{0,20}(expired|invalid)|expired[^"]{0,20}token/i.test(
     JSON.stringify(r.json ?? "").slice(0, 400),
   );
+
+// Deposit-tracing diagnostic: each proxy entry server, the public IP it leaves from, and
+// which one Moneta calls currently use.
+export async function proxyExitIps() {
+  const hosts = await entryHosts();
+  const servers: Array<{ entry: string; exitIp: string; inUse: boolean }> = [];
+  for (const [i, host] of hosts.entries()) {
+    const d = agentFor(host);
+    try {
+      const r = await fetch("https://api.ipify.org", { ...(d ? { dispatcher: d } : {}), signal: AbortSignal.timeout(15_000) } as RequestInit);
+      servers.push({ entry: host, exitIp: (await r.text()).slice(0, 60), inUse: hosts.length > 0 && i === entryIndex % hosts.length });
+    } catch (e) {
+      servers.push({ entry: host, exitIp: "error: " + String((e as Error).message).slice(0, 80), inUse: i === entryIndex % hosts.length });
+    } finally {
+      void d?.close().catch(() => undefined);
+    }
+  }
+  return { proxyConfigured: Boolean(proxyUrl), servers };
+}
