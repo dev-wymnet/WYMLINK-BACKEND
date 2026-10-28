@@ -8,6 +8,7 @@ import { verifyTransactionPin } from "../auth/service/pin.service.js";
 import {
   accountSetupState,
   getMyVirtualAccount,
+  checkForDeposits,
   listMyDeposits,
   openVirtualAccount,
   releaseHeldDeposit,
@@ -74,6 +75,7 @@ export const openVirtualAccountHandler = wrap(async (req) => {
 
 export const myDepositsHandler = wrap(async (req) => {
   const q = limitQuery.parse(req.query);
+  await checkForDeposits(userOf(req));
   return { deposits: await listMyDeposits(userOf(req), q.limit) };
 });
 

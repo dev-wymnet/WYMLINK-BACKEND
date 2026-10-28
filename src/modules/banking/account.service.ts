@@ -223,8 +223,9 @@ async function creditDeposit(tx: Parameters<Parameters<typeof db.transaction>[0]
   return credited!;
 }
 
-// Reads the VA's Moneta history and records any new credits. Called only when a payment
-// notification arrives (every Moneta call spends the proxy's monthly request quota).
+// Reads the VA's Moneta history and records any new credits. Called when a payment
+// notification arrives and by checkForDeposits (every Moneta call spends the proxy's monthly
+// request quota).
 // Only Moneta's own history is trusted.
 export async function syncDeposits(va: VirtualAccount) {
   const from = new Date(Math.max(va.createdAt.getTime() - 86_400_000, Date.now() - 30 * 86_400_000));
@@ -235,6 +236,29 @@ export async function syncDeposits(va: VirtualAccount) {
     if (d) fresh.push(d);
   }
   return fresh;
+}
+
+// Moneta's payment notification doesn't always come, so a customer looking at their wallet
+// (home, wallet, deposits) also checks their account's Moneta history: at most once a
+// minute per customer, since each check is a proxied Moneta call. Waits briefly so a credit
+// that has landed shows in the same response; a slow Moneta never holds the page up.
+const DEPOSIT_CHECK_EVERY_MS = 60_000;
+const DEPOSIT_CHECK_WAIT_MS = 6_000;
+const lastDepositCheck = new Map<string, number>();
+
+export async function checkForDeposits(userId: string) {
+  const now = Date.now();
+  if (now - (lastDepositCheck.get(userId) ?? 0) < DEPOSIT_CHECK_EVERY_MS) return;
+  lastDepositCheck.set(userId, now);
+  if (lastDepositCheck.size > 50_000) lastDepositCheck.clear();
+  const va = await getMyVirtualAccount(userId);
+  if (!va) return;
+  const sync = syncDeposits(va)
+    .then((fresh) => {
+      if (fresh.length) logger.info({ userId, credited: fresh.length }, "deposits_found_on_check");
+    })
+    .catch((err) => logger.warn({ userId, err: (err as Error).message }, "deposit_check_failed"));
+  await Promise.race([sync, new Promise((r) => setTimeout(r, DEPOSIT_CHECK_WAIT_MS))]);
 }
 
 export async function listMyDeposits(userId: string, limit: number) {
