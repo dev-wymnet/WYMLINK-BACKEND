@@ -11,12 +11,20 @@ import {
 import {
   addCustomerMessage,
   addStaffMessage,
+  assignTicket,
   createSupportTicket,
   getTicketForStaff,
   listMySupportTickets,
   listTicketsForStaff,
   setTicketStatus,
 } from "../repository/support.repository.js";
+
+// The signed-in staff member (set by requireAdmin).
+const staffOf = (req: Parameters<RequestHandler>[0]) => {
+  const a = (req as any).admin as { id: string; name: string } | undefined;
+  if (!a) throw new UnauthorizedError();
+  return { id: a.id, name: a.name };
+};
 
 export const meHandler: RequestHandler = async (req, res, next) => {
   try {
@@ -129,8 +137,14 @@ export const addSupportMessageHandler: RequestHandler = async (req, res, next) =
 
 export const adminListTicketsHandler: RequestHandler = async (req, res, next) => {
   try {
-    const q = z.object({ status: z.enum(["open", "awaiting_customer", "resolved", "closed"]).optional(), limit: z.coerce.number().int().min(1).max(200).default(50) }).parse(req.query);
-    res.status(200).json({ tickets: await listTicketsForStaff(q) });
+    const q = z
+      .object({
+        status: z.enum(["open", "awaiting_customer", "resolved", "closed"]).optional(),
+        assigned: z.enum(["me", "unassigned"]).optional(),
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+      })
+      .parse(req.query);
+    res.status(200).json({ tickets: await listTicketsForStaff({ ...q, staffId: staffOf(req).id }) });
   } catch (err) {
     next(err);
   }
@@ -138,7 +152,7 @@ export const adminListTicketsHandler: RequestHandler = async (req, res, next) =>
 
 export const adminGetTicketHandler: RequestHandler = async (req, res, next) => {
   try {
-    res.status(200).json({ ticket: await getTicketForStaff(ticketId(req.params.id)) });
+    res.status(200).json({ ticket: await getTicketForStaff(ticketId(req.params.id), staffOf(req)) });
   } catch (err) {
     next(err);
   }
@@ -146,9 +160,10 @@ export const adminGetTicketHandler: RequestHandler = async (req, res, next) => {
 
 export const adminReplyTicketHandler: RequestHandler = async (req, res, next) => {
   try {
-    if (!req.user) throw new UnauthorizedError();
-    const body = messageSchema.extend({ resolve: z.boolean().optional() }).parse(req.body ?? {});
-    res.status(201).json({ ticket: await addStaffMessage({ staffId: req.user.id, ticketId: ticketId(req.params.id), body: body.body, resolve: body.resolve }) });
+    const body = messageSchema.extend({ resolve: z.boolean().optional(), afterMessageId: z.string().uuid().optional() }).parse(req.body ?? {});
+    res.status(201).json({
+      ticket: await addStaffMessage({ staff: staffOf(req), ticketId: ticketId(req.params.id), body: body.body, resolve: body.resolve, afterMessageId: body.afterMessageId }),
+    });
   } catch (err) {
     next(err);
   }
@@ -157,7 +172,18 @@ export const adminReplyTicketHandler: RequestHandler = async (req, res, next) =>
 export const adminSetTicketStatusHandler: RequestHandler = async (req, res, next) => {
   try {
     const { status } = z.object({ status: z.enum(["open", "awaiting_customer", "resolved", "closed"]) }).parse(req.body ?? {});
-    res.status(200).json({ ticket: await setTicketStatus(ticketId(req.params.id), status) });
+    res.status(200).json({ ticket: await setTicketStatus(ticketId(req.params.id), status, staffOf(req)) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Take a ticket ("me") or let it go ("none").
+export const adminAssignTicketHandler: RequestHandler = async (req, res, next) => {
+  try {
+    const { assignee } = z.object({ assignee: z.enum(["me", "none"]) }).parse(req.body ?? {});
+    const staff = staffOf(req);
+    res.status(200).json({ ticket: await assignTicket(ticketId(req.params.id), assignee === "me" ? staff.id : null, staff) });
   } catch (err) {
     next(err);
   }

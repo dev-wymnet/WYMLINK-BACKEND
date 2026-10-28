@@ -25,7 +25,7 @@ function staffGuard(allowPendingPassword: boolean): RequestHandler {
 
       if (user.mustChangePassword && !allowPendingPassword) return next(new PasswordChangeRequiredError());
 
-      (req as any).admin = { id: user.id, role: user.role, status: user.status };
+      (req as any).admin = { id: user.id, role: user.role, status: user.status, name: `${user.firstName} ${user.lastName}`.trim() };
       return next();
     } catch (err) {
       return next(err);

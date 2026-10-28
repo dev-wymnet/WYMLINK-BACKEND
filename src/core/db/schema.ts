@@ -313,6 +313,8 @@ export const supportTickets = app.table("support_tickets", {
   status: text("status").notNull().default("open"),
   relatedType: text("related_type"),
   relatedId: uuid("related_id"),
+  assignedTo: uuid("assigned_to"),
+  assignedAt: ts("assigned_at"),
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });

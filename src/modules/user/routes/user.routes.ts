@@ -9,6 +9,7 @@ import {
   addSupportMessageHandler,
   adminGetTicketHandler,
   adminListTicketsHandler,
+  adminAssignTicketHandler,
   adminReplyTicketHandler,
   adminSetTicketStatusHandler,
   createAccountUpdateRequestHandler,
@@ -72,3 +73,4 @@ adminSupportRoutes.get("/tickets", authGuard, requireAdmin, requirePermission(Pe
 adminSupportRoutes.get("/tickets/:id", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_VIEW_USERS), adminGetTicketHandler);
 adminSupportRoutes.post("/tickets/:id/messages", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_MANAGE_USERS), adminReplyTicketHandler);
 adminSupportRoutes.patch("/tickets/:id", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_MANAGE_USERS), adminSetTicketStatusHandler);
+adminSupportRoutes.post("/tickets/:id/assign", authGuard, requireAdmin, requirePermission(Permissions.ADMIN_MANAGE_USERS), adminAssignTicketHandler);

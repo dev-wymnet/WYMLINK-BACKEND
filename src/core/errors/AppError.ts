@@ -134,6 +134,17 @@ export class LoginLockedError extends AppError {
   }
 }
 
+// A colleague answered the ticket while this staff member was writing.
+export class ReplyConflictError extends AppError {
+  constructor(colleague: string) {
+    super(`${colleague} replied while you were writing. Read their reply, then send yours if it's still needed.`, {
+      statusCode: 409,
+      code: "REPLY_CONFLICT",
+    });
+    this.name = "ReplyConflictError";
+  }
+}
+
 export class PasswordChangeRequiredError extends AppError {
   constructor(message = "Set a new password before you continue.") {
     super(message, { statusCode: 403, code: "PASSWORD_CHANGE_REQUIRED" });
