@@ -11,6 +11,8 @@ async function bootstrap() {
   await checkPostgresConnection();
   logger.info("postgres_connected");
 
+  if (!config.ADMIN_MFA_REQUIRED) logger.warn("admin_mfa_switched_off: staff sign in with a password only (ADMIN_MFA_REQUIRED=false)");
+
   if (config.DB_MIGRATE_ON_START) {
     await migrateLatest();
   }

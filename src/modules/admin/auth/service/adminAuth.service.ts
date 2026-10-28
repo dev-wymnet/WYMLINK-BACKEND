@@ -2,6 +2,7 @@ import bcrypt from "bcrypt";
 import { timingSafeEqual } from "node:crypto";
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 
+import { config } from "../../../../core/config/index.js";
 import { db } from "../../../../core/db/client.js";
 import { adminMfa, adminMfaChallenges, users } from "../../../../core/db/schema.js";
 import { UnauthorizedError } from "../../../../core/errors/UnauthorizedError.js";
@@ -101,6 +102,12 @@ export async function adminLogin(input: { email?: string | undefined; phone?: st
     throw new UnauthorizedError("Invalid credentials");
   }
 
+  // Two-step sign-in switched off (ADMIN_MFA_REQUIRED=false): the password alone signs in.
+  if (!config.ADMIN_MFA_REQUIRED) {
+    logger.warn({ adminId: user.id }, "admin_login_without_mfa");
+    return startAdminSession(user, keys, input, "mfa_switched_off");
+  }
+
   const enrolled = Boolean(await authenticator(user.id));
   const secret = enrolled ? null : newTotpSecret();
   const raw = randomToken(32);
@@ -191,6 +198,12 @@ export async function adminVerifyMfa(input: { mfaToken: string; code: string } &
     );
   }
 
+  return startAdminSession(user, keys, input);
+}
+
+// The staff session, once sign-in is complete. `reason` marks sign-ins that skipped the
+// authenticator step in the audit log.
+async function startAdminSession(user: User, keys: string[], input: RequestMeta, reason?: string) {
   await clearLoginFailures(keys);
   const tokens = await issueTokens(
     { userId: user.id, role: user.role },
@@ -203,7 +216,7 @@ export async function adminVerifyMfa(input: { mfaToken: string; code: string } &
     },
   );
   await touchLastLogin(user.id);
-  await audit(input, { actor: user, action: "ADMIN_LOGIN_SUCCESS", success: true });
+  await audit(input, { actor: user, action: "ADMIN_LOGIN_SUCCESS", success: true, ...(reason ? { reason } : {}) });
   logger.info({ adminId: user.id }, "admin_login");
 
   return { ...tokens, admin: toAdminDto(user) };
@@ -241,7 +254,12 @@ export async function adminLogout(input: { refreshToken: string } & RequestMeta)
 export async function adminMe(input: { userId: string }) {
   const user = await findUserById(input.userId);
   if (!isActiveAdmin(user)) throw new UnauthorizedError();
-  return { admin: toAdminDto(user), mustChangePassword: user.mustChangePassword, mfaEnrolled: Boolean(await authenticator(user.id)) };
+  return {
+    admin: toAdminDto(user),
+    mustChangePassword: user.mustChangePassword,
+    mfaEnrolled: Boolean(await authenticator(user.id)),
+    mfaRequired: config.ADMIN_MFA_REQUIRED,
+  };
 }
 
 // Ends every other staff session for the account; the one making the change carries on.

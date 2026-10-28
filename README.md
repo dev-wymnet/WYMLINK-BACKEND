@@ -30,6 +30,9 @@ away from Supabase's public API roles (row-level security, no grants).
   creates the first super admin (refuses if one exists). Other staff are added from the console.
 - `ADMIN_EMAIL=… npm run admin:reset-mfa` (or `node dist/scripts/resetAdminMfa.js` on the
   server): removes a staff member's authenticator so they set it up again at next sign-in.
+- `ADMIN_MFA_REQUIRED=false`: switches the authenticator step off for everyone (e.g. while
+  testers use the console). The server logs a warning at start and on every such sign-in;
+  remove the setting (or set `true`) to switch it back on.
 
 ## Deploy
 

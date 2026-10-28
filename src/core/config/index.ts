@@ -44,6 +44,13 @@ const extraSchema = z.object({
 
   // /api-docs and /openapi.json. Default: on everywhere except production.
   API_DOCS_ENABLED: z.union([z.literal("true"), z.literal("false")]).optional(),
+
+  // Staff sign-in asks for an authenticator code. "false" switches that off for everyone
+  // (e.g. while testers use the console); every sign-in then logs a warning.
+  ADMIN_MFA_REQUIRED: z
+    .union([z.literal("true"), z.literal("false")])
+    .default("true")
+    .transform((v) => v === "true"),
 });
 
 const extra = extraSchema.parse(process.env);
@@ -118,6 +125,8 @@ export const config = {
   BFF_SHARED_SECRET: extra.BFF_SHARED_SECRET,
 
   API_DOCS_ENABLED: extra.API_DOCS_ENABLED ? extra.API_DOCS_ENABLED === "true" : baseEnv.NODE_ENV !== "production",
+
+  ADMIN_MFA_REQUIRED: extra.ADMIN_MFA_REQUIRED,
 
   /**
    * Backward compatibility
