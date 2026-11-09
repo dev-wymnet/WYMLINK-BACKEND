@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import { CUSTOMER_HASH_COST } from "../../../core/auth/hashCost.js";
 import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { db } from "../../../core/db/client.js";
@@ -111,7 +112,7 @@ export async function createTransactionPin(input: { userId: string; pin: string 
   if (!PIN_RE.test(input.pin)) throw new ValidationError("Invalid PIN format");
   const updated = await db
     .update(users)
-    .set({ transactionPinHash: await bcrypt.hash(input.pin, 12) })
+    .set({ transactionPinHash: await bcrypt.hash(input.pin, CUSTOMER_HASH_COST) })
     .where(and(eq(users.id, input.userId), isNull(users.transactionPinHash)))
     .returning({ id: users.id });
   if (!updated.length) throw new TransactionPinAlreadySetError();
@@ -119,7 +120,7 @@ export async function createTransactionPin(input: { userId: string; pin: string 
 
 async function writeTransactionPin(userId: string, pin: string) {
   if (!PIN_RE.test(pin)) throw new ValidationError("Invalid PIN format");
-  await db.update(users).set({ transactionPinHash: await bcrypt.hash(pin, 12) }).where(eq(users.id, userId));
+  await db.update(users).set({ transactionPinHash: await bcrypt.hash(pin, CUSTOMER_HASH_COST) }).where(eq(users.id, userId));
 }
 
 export async function changeTransactionPin(input: { userId: string; currentPin: string; newPin: string }) {
@@ -160,7 +161,7 @@ export async function createPasscode(input: { userId: string; passcode: string }
   if (!PASSCODE_RE.test(input.passcode)) throw new ValidationError("Your passcode must be 6 digits");
   const updated = await db
     .update(users)
-    .set({ passcodeHash: await bcrypt.hash(input.passcode, 12) })
+    .set({ passcodeHash: await bcrypt.hash(input.passcode, CUSTOMER_HASH_COST) })
     .where(and(eq(users.id, input.userId), isNull(users.passcodeHash)))
     .returning({ id: users.id });
   if (!updated.length) throw new ValidationError("A passcode is already set. Change it instead.");
@@ -181,5 +182,5 @@ export async function verifyPasscode(input: { userId: string; passcode: string }
 export async function changePasscode(input: { userId: string; currentPasscode: string; newPasscode: string }) {
   await verifyPasscode({ userId: input.userId, passcode: input.currentPasscode });
   if (!PASSCODE_RE.test(input.newPasscode)) throw new ValidationError("Your passcode must be 6 digits");
-  await db.update(users).set({ passcodeHash: await bcrypt.hash(input.newPasscode, 12) }).where(eq(users.id, input.userId));
+  await db.update(users).set({ passcodeHash: await bcrypt.hash(input.newPasscode, CUSTOMER_HASH_COST) }).where(eq(users.id, input.userId));
 }

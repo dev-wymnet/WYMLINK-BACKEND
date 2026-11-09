@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import { CUSTOMER_HASH_COST } from "../../../core/auth/hashCost.js";
 import { eq } from "drizzle-orm";
 
 import { env } from "../../../core/config/env.js";
@@ -33,7 +34,8 @@ import { consumeOtp, issueOtp, quietly } from "./otp.service.js";
 import { assertLoginAllowed, clearLoginFailures, loginKeys, registerLoginFailure } from "./loginLock.service.js";
 
 // bcrypt hash of a random throwaway string, used to equalise login timing.
-const DUMMY_HASH = bcrypt.hashSync(randomToken(16), 12);
+// Same cost as customer hashes, so an unknown account takes as long as a real one.
+const DUMMY_HASH = bcrypt.hashSync(randomToken(16), CUSTOMER_HASH_COST);
 
 export type ClientContext = {
   client?: "web" | "mobile" | undefined;
@@ -60,7 +62,7 @@ export async function signup(
     throw new ValidationError("An account with this email or phone number already exists");
   }
 
-  const passwordHash = await bcrypt.hash(input.password, 12);
+  const passwordHash = await bcrypt.hash(input.password, CUSTOMER_HASH_COST);
   let userId: string;
   let role: string;
   try {
@@ -210,7 +212,7 @@ export async function resetPasswordWithOtp(input: { email: string; code: string;
   if (!user?.email || user.role !== "customer") throw new InvalidCodeError();
 
   await consumeOtp(user.id, "reset_password", input.code);
-  const passwordHash = await bcrypt.hash(input.newPassword, 12);
+  const passwordHash = await bcrypt.hash(input.newPassword, CUSTOMER_HASH_COST);
   await db.update(users).set({ passwordHash }).where(eq(users.id, user.id));
 
   // A password reset signs out every device and lifts a sign-in lockout.
