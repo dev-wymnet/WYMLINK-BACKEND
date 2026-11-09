@@ -5,6 +5,32 @@ Read all of it before writing code. Last updated: 2026-10-26 (Moneta details con
 
 ---
 
+## 0. Changes for the launch event (Nov 2026), read first
+
+- **Account numbers come with the account.** `signup` creates the customer ID and opens the Moneta
+  account in the background (no BVN/NIN: Moneta's placeholder BVN unless a verified one is kept).
+  `GET /wallets/virtual-account` answers `{account}` or `{account: null, setup: "opening"}` (asking also
+  retries a failed opening, at most every 5 min). `POST /wallets/virtual-account` needs no body.
+  BVN/NIN verification now only raises limits.
+- **Customer ID**: `users.customer_code` ("WL" + 6 digits), in `/user/me` and `/dashboard/home`
+  (`user.customerCode`). It is the Moneta `account_name`, so the bank shows "MONETA TECH(WYMNET-WL123456)".
+  If Moneta ever refuses digits there, the ID is spelt in letters (0→A … 9→J) from then on.
+- **Free event** (`modules/promo`): `GET /promo/current` → `{event, mine}`. Purchases with `promo: true`
+  (airtime, data, cable) are free: no wallet debit, `vtu_orders.promo_event_id` set, allowances per customer
+  and per recipient checked under a row lock, optional budget. Refused (400 `PROMO_UNAVAILABLE`), never
+  charged, when not covered. Collections ignore these orders. Staff: `/admin/promo` (start/edit: super admin;
+  `POST /admin/promo/:id/end`, the kill switch: any staff).
+- **WymNet businesses** (`modules/business`): internal accounts (role `business`, never sign in) with their own
+  account number and a fixed 6-character code; the QR holds `https://<site>/pay/<CODE>`.
+  `GET /businesses/:code` (public), `POST /businesses/:code/pay` `{amount, transactionPin, reference}` (an
+  ordinary transfer). Staff: `/admin/businesses`.
+- **Client IPs**: behind Render, `req.ip` was an internal 10.x address for everyone; `clientIp` now uses
+  Cloudflare's `CF-Connecting-IP` when `req.ip` is internal. The website still needs `BFF_SHARED_SECRET`
+  set (same value) on Render and Vercel for its visitors' IPs.
+- **Rate limits**: the API-wide limit counts signed-in traffic per access token (100/min) with a per-IP ceiling
+  30× higher; anonymous traffic stays 100/min per IP.
+- **Deposits**: only the deposits list checks Moneta (every 10 min per customer); notifications credit the rest.
+
 ## 1. What Wymlink is
 
 Wymlink is a Nigerian wallet app by **WymNet** (wymnet.org, info@wymnet.org, +234 707 594 9707).
