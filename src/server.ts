@@ -95,10 +95,13 @@ export function createServer(): Express {
   );
 
   const api = express.Router();
-  api.get("/health", (_req, res) => {
+  api.get("/health", (req, res) => {
+    // TEMPORARY (proxy check): the caller's own address as this server sees it, and the
+    // forwarding chain the hosting proxies added. Only the caller's own data.
+    const probe = req.query.ip === "1" ? { seenIp: req.ip, xff: req.get("x-forwarded-for") ?? null, cf: Boolean(req.get("cf-connecting-ip")), trueClient: Boolean(req.get("true-client-ip")), socket: req.socket.remoteAddress ?? null } : {};
     res
       .status(200)
-      .json({ ok: true, uptimeSeconds: Math.floor(process.uptime()) });
+      .json({ ok: true, uptimeSeconds: Math.floor(process.uptime()), ...probe });
   });
 
   api.get("/ready", async (_req, res) => {
