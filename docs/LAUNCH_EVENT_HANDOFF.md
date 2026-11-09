@@ -175,8 +175,9 @@ name + this handoff + `e2e/`. API notes for the apps: `docs/MOBILE_HANDOFF.md` Â
    `{source_virtual_account, destination_virtual_account, amount}`), but the first real one
    should be the owner's â‚¦100 rehearsal tonight, not the stage demo.
 3. The admin Free event and Businesses pages on live.
-4. The display name with the customer's name on live (deployed with this handoff; check it
-   with any customer account).
+
+(The display name with the customer's name **is** verified on live: the test customer shows
+"MONETA TECH(WYMNET-WL417731 LAUNCH TEST)" on the virtual account, dashboard and wallet.)
 
 ## 5. Suggested test plan
 
