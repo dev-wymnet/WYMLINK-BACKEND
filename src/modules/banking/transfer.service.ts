@@ -73,7 +73,10 @@ async function findMine(senderId: string, reference: string) {
 
 // Debits the sender (one transaction), moves the money between the two Moneta
 // accounts once, then credits the recipient only after Moneta confirms.
-export async function createTransfer(input: { senderId: string; reference: string; recipient: string; amountCents: bigint; narration?: string | undefined }) {
+// `quick`: skip the Moneta balance pre-check (one Moneta call, ~20-30 s through the proxy)
+// for payments a customer is standing at a till for; if Moneta can't cover it, it refuses
+// the transfer and the wallet is refunded as usual.
+export async function createTransfer(input: { senderId: string; reference: string; recipient: string; amountCents: bigint; narration?: string | undefined; quick?: boolean }) {
   const existing = await findMine(input.senderId, input.reference);
   if (existing) return existing;
   if (input.amountCents < 10_000n) throw new ValidationError("The minimum transfer is ₦100");
@@ -81,7 +84,7 @@ export async function createTransfer(input: { senderId: string; reference: strin
   const senderVa = await getMyVirtualAccount(input.senderId);
   if (!senderVa) throw new ValidationError("Get your account number first: transfers are sent from it.");
   const to = await findRecipient(input.recipient, input.senderId);
-  await checkMonetaCovers(input.senderId, senderVa.providerReference, input.amountCents);
+  if (!input.quick) await checkMonetaCovers(input.senderId, senderVa.providerReference, input.amountCents);
 
   let t: Transfer;
   try {

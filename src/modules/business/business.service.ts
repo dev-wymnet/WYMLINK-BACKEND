@@ -166,6 +166,8 @@ export async function payBusiness(input: { userId: string; code: string; referen
     recipient: va.accountNumber,
     amountCents: input.amountCents,
     narration: `Payment to ${b.name}`,
+    // One Moneta call instead of two: the customer is waiting at the till.
+    quick: true,
   });
   return { business: { code: b.code, name: b.name }, transfer: await transferDtoFor(transfer, input.userId) };
 }
