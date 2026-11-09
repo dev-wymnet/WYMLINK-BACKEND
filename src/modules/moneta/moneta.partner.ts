@@ -12,6 +12,7 @@ import {
   looksLikeTokenRejection,
   monetaFetch,
   sharedToken,
+  type MonetaLane,
   type MonetaResponse,
 } from "./moneta.http.js";
 
@@ -43,7 +44,8 @@ async function mint() {
   return { token, expiresAt: Number.isFinite(exp) ? new Date(exp - 5 * 60_000) : null };
 }
 
-async function call(method: "GET" | "POST", path: string, body?: object, timeoutMs = 90_000): Promise<MonetaResponse> {
+// `lane`: "background" for calls a customer isn't waiting on (see moneta.http.ts).
+async function call(method: "GET" | "POST", path: string, body?: object, timeoutMs = 90_000, lane: MonetaLane = "main"): Promise<MonetaResponse> {
   requireConfigured();
   let token = await sharedToken(PROVIDER, mint);
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -51,6 +53,7 @@ async function call(method: "GET" | "POST", path: string, body?: object, timeout
       method,
       headers: { Accept: "application/json", "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       timeoutMs,
+      lane,
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
     // An expired/replaced token is rejected before anything is processed: safe to retry once.
@@ -116,15 +119,22 @@ export async function createVirtualAccount(input: { firstName: string; surname: 
   const first = lettersOnly(input.firstName) || lettersOnly(input.surname) || "User";
   const last = lettersOnly(input.surname) || first;
   const wanted = (input.accountName ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || first.slice(0, 8);
+  // Background lane: openings come in bursts after sign-ups and must not hold up payments.
   const open = (accountName: string) =>
-    call("POST", "/partner/virtual-accounts", {
-      account_name: accountName,
-      account_type: "static",
-      surname: last,
-      first_name: first,
-      bvn: input.bvn && /^\d{11}$/.test(input.bvn) ? input.bvn : BVN_PLACEHOLDER,
-      nin: NIN_PLACEHOLDER,
-    });
+    call(
+      "POST",
+      "/partner/virtual-accounts",
+      {
+        account_name: accountName,
+        account_type: "static",
+        surname: last,
+        first_name: first,
+        bvn: input.bvn && /^\d{11}$/.test(input.bvn) ? input.bvn : BVN_PLACEHOLDER,
+        nin: NIN_PLACEHOLDER,
+      },
+      90_000,
+      "background",
+    );
   let r = await open(nameDigitsRefused ? spelt(wanted) : wanted);
   // A plain refusal (4xx, nothing created) of a name with digits: try once in letters.
   if (!ok(r) && !nameDigitsRefused && /\d/.test(wanted) && r.status >= 400 && r.status < 500 && !r.json?.data?.virtual_account_reference) {

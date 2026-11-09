@@ -49,26 +49,37 @@ function agentFor(host: string | undefined) {
   return new ProxyAgent({ uri: u.toString(), connections: 1, keepAliveTimeout: TUNNEL_KEEP_MS, keepAliveMaxTimeout: TUNNEL_KEEP_MS });
 }
 
-let dispatcher: ProxyAgent | undefined;
-async function currentDispatcher() {
+// Two lanes, each its own tunnel (one connection, so its calls go one at a time):
+//  - main: money and anything a customer waits on (transfers, payouts, balances, deposits,
+//    the access token);
+//  - background: opening account numbers, which can take a minute each and come in bursts
+//    after sign-ups. They no longer queue in front of a customer's payment.
+// Both open to the same entry server, so both leave from the whitelisted IP.
+export type MonetaLane = "main" | "background";
+const dispatchers: Partial<Record<MonetaLane, ProxyAgent>> = {};
+async function currentDispatcher(lane: MonetaLane) {
   if (!proxyBase) return undefined;
-  if (!dispatcher) {
+  if (!dispatchers[lane]) {
     const hosts = await entryHosts();
-    dispatcher = agentFor(hosts[entryIndex % hosts.length]);
+    const agent = agentFor(hosts[entryIndex % hosts.length]);
+    if (agent) dispatchers[lane] = agent;
   }
-  return dispatcher;
+  return dispatchers[lane];
 }
 
-// `switchEntry`: the exit IP was refused, so move to the next entry server.
-function dropTunnel(switchEntry = false) {
+// `switchEntry`: the exit IP was refused, so move to the next entry server. Both lanes
+// were opened to that server, so both tunnels are dropped.
+function dropTunnel(lane: MonetaLane, switchEntry = false) {
   if (switchEntry) {
     entryIndex++;
     logger.warn({ entryIndex }, "moneta_proxy_switch_entry");
   }
-  const bad = dispatcher;
-  dispatcher = undefined;
-  // close(), not destroy(): requests already on the old tunnel finish instead of failing.
-  void bad?.close().catch(() => undefined);
+  for (const l of switchEntry ? (Object.keys(dispatchers) as MonetaLane[]) : [lane]) {
+    const bad = dispatchers[l];
+    delete dispatchers[l];
+    // close(), not destroy(): requests already on the old tunnel finish instead of failing.
+    void bad?.close().catch(() => undefined);
+  }
 }
 
 
@@ -97,11 +108,13 @@ const isIpReject = (json: any) =>
   json?.responseErrorCode === "03" ||
   /\bip\b[^"]{0,20}not\s*(whitelist|recogni[sz]ed)|not\s*whitelist/i.test(JSON.stringify(json ?? "").slice(0, 400));
 
-async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }): Promise<MonetaResponse> {
-  const { timeoutMs: _t, ...rest } = init;
+type MonetaInit = RequestInit & { timeoutMs?: number; lane?: MonetaLane };
+
+async function fetchOnce(url: string, init: MonetaInit): Promise<MonetaResponse> {
+  const { timeoutMs: _t, lane = "main", ...rest } = init;
   let res: Awaited<ReturnType<typeof fetch>>;
   let text: string;
-  const d = await currentDispatcher();
+  const d = await currentDispatcher(lane);
   try {
     res = await fetch(url, {
       ...rest,
@@ -121,7 +134,7 @@ async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }
     // Kept for the deposit-tracing diagnostic; anything URL-like is cut so no credentials leak.
     const scrub = (v?: string) => v?.replace(/\w+:\/\/\S+/g, "<url>").slice(0, 200);
     if (recentNetworkErrors.push({ path: new URL(url).pathname, at: new Date().toISOString(), name: e.name, message: scrub(e.message), code: e.code ?? e.cause?.code, cause: scrub(e.cause?.message) }) > 10) recentNetworkErrors.shift();
-    dropTunnel();
+    dropTunnel(lane);
     throw new MonetaError(UNREACHABLE, 502, null);
   }
   try {
@@ -132,16 +145,17 @@ async function fetchOnce(url: string, init: RequestInit & { timeoutMs?: number }
   }
 }
 
-export async function monetaFetch(url: string, init: RequestInit & { timeoutMs?: number }): Promise<MonetaResponse> {
+export async function monetaFetch(url: string, init: MonetaInit): Promise<MonetaResponse> {
+  const lane = init.lane ?? "main";
   let r = await fetchOnce(url, init);
   for (let i = 1; i < IP_RETRIES && isIpReject(r.json); i++) {
     logger.info({ attempt: i }, "moneta_ip_not_whitelisted_retry");
-    dropTunnel(true); // this entry server exits from the wrong IP: move to the next one
+    dropTunnel(lane, true); // this entry server exits from the wrong IP: move to the next one
     r = await fetchOnce(url, init);
   }
   if (isIpReject(r.json)) {
     if (recentNetworkErrors.push({ path: new URL(url).pathname, at: new Date().toISOString(), rejected: JSON.stringify(r.json).slice(0, 400) }) > 10) recentNetworkErrors.shift();
-    dropTunnel();
+    dropTunnel(lane);
     throw new MonetaError("Moneta is temporarily unreachable. Please try again shortly.", 503, null);
   }
   return r;
