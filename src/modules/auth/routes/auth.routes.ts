@@ -18,7 +18,9 @@ const MIN = 60 * 1000;
 // account (loose: carrier IPs are shared). Guessers on many IPs meet the per-account
 // lockout in loginLock.service.
 const loginLimiter = limiter({ windowMs: 15 * MIN, max: 10, by: "ip+identity" });
-const loginIpFailLimiter = limiter({ windowMs: 15 * MIN, max: 50, failuresOnly: true });
+// Per IP, failures only. A venue Wi-Fi or carrier CGNAT shares one IP; the per-account lockout
+// (loginLock) is what stops guessing one account.
+const loginIpFailLimiter = limiter({ windowMs: 15 * MIN, max: 200, failuresOnly: true });
 const logoutLimiter = limiter({ windowMs: MIN, max: 30 });
 // Sign-up: tight per contact tried, loose per IP (many customers share a carrier IP).
 const signupLimiter = limiter({ windowMs: 60 * MIN, max: 5, by: "ip+identity" });
