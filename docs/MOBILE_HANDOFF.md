@@ -15,6 +15,8 @@ Read all of it before writing code. Last updated: 2026-10-26 (Moneta details con
 - **Customer ID**: `users.customer_code` ("WL" + 6 digits), in `/user/me` and `/dashboard/home`
   (`user.customerCode`). It is the Moneta `account_name`, so the bank shows "MONETA TECH(WYMNET-WL123456)".
   If Moneta ever refuses digits there, the ID is spelt in letters (0→A … 9→J) from then on.
+  Customer-facing `accountName` adds the customer's name after the ID ("MONETA TECH(WYMNET-WL123456 ADA
+  LOVELACE)"); display only: banks still show Moneta's name.
 - **Free event** (`modules/promo`): `GET /promo/current` → `{event, mine}`. Purchases with `promo: true`
   (airtime, data, cable) are free: no wallet debit, `vtu_orders.promo_event_id` set, allowances per customer
   and per recipient checked under a row lock, optional budget. Refused (400 `PROMO_UNAVAILABLE`), never

@@ -17,8 +17,26 @@ export type Deposit = typeof deposits.$inferSelect;
 
 const naira = (n: number) => parseMoneyToCents(n.toFixed(2));
 
-export function toVirtualAccountDto(va: VirtualAccount) {
-  return { accountNumber: va.accountNumber, accountName: va.accountName, bankName: va.bankName, status: va.status, createdAt: va.createdAt };
+type Owner = { firstName: string; lastName: string } | null | undefined;
+
+// What a customer sees as their account's name: Moneta's name (which holds only the
+// customer ID: Moneta allows 8 characters) with their own name after the ID, e.g.
+// "MONETA TECH(WYMNET-WL417731 ADA LOVELACE)". Display only: banks still show Moneta's name.
+export function displayAccountName(raw: string, owner: Owner) {
+  const words = owner ? `${owner.firstName} ${owner.lastName}`.toUpperCase().split(/\s+/).filter(Boolean) : [];
+  // Older accounts were named after the first name: add only what isn't there yet.
+  const missing = words.filter((w) => !raw.toUpperCase().includes(w)).join(" ");
+  if (!missing) return raw;
+  return raw.endsWith(")") ? `${raw.slice(0, -1)} ${missing})` : `${raw} ${missing}`.trim();
+}
+
+export async function accountOwner(userId: string): Promise<Owner> {
+  const [u] = await db.select({ firstName: users.firstName, lastName: users.lastName }).from(users).where(eq(users.id, userId)).limit(1);
+  return u ?? null;
+}
+
+export function toVirtualAccountDto(va: VirtualAccount, owner?: Owner) {
+  return { accountNumber: va.accountNumber, accountName: displayAccountName(va.accountName, owner), bankName: va.bankName, status: va.status, createdAt: va.createdAt };
 }
 
 export function toDepositDto(d: Deposit) {

@@ -5,6 +5,7 @@ import { vtuOrders, walletLedger } from "../../../core/db/schema.js";
 import { getMe } from "../../user/service/user.service.js";
 import { getWalletDetails } from "../../wallet/service/wallet.service.js";
 import { toOrderDto } from "../../vtu/vtu.service.js";
+import { displayAccountName } from "../../banking/account.service.js";
 
 const num = (v: unknown) => {
   const n = Number(v);
@@ -55,7 +56,7 @@ export async function getDashboardHome(userId: string) {
       balance: num(wallet.availableBalance),
       currency: wallet.currencyCode,
       accountNumber: virtualAccount?.accountNumber ?? "",
-      accountName: virtualAccount?.accountName ?? "",
+      accountName: virtualAccount ? displayAccountName(virtualAccount.accountName, user) : "",
       bankName: virtualAccount?.bankName ?? "",
     },
     analytics: {

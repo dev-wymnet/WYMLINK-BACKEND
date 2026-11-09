@@ -6,6 +6,7 @@ import { parseMoneyToCents } from "../../core/utils/money.js";
 import { insertAuditLog } from "../audit/repository/audit.repository.js";
 import { verifyTransactionPin } from "../auth/service/pin.service.js";
 import {
+  accountOwner,
   accountSetupState,
   getMyVirtualAccount,
   checkForDeposits,
@@ -62,13 +63,14 @@ const limitQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).def
 export const myVirtualAccountHandler = wrap(async (req) => {
   const userId = userOf(req);
   const va = await getMyVirtualAccount(userId);
-  return { account: va ? toVirtualAccountDto(va) : null, setup: va ? null : await accountSetupState(userId) };
+  return { account: va ? toVirtualAccountDto(va, await accountOwner(userId)) : null, setup: va ? null : await accountSetupState(userId) };
 });
 
 // No BVN or NIN needed any more; older apps still send them and they are ignored.
 export const openVirtualAccountHandler = wrap(async (req) => {
-  const va = await openVirtualAccount({ userId: userOf(req) });
-  return { account: toVirtualAccountDto(va) };
+  const userId = userOf(req);
+  const va = await openVirtualAccount({ userId });
+  return { account: toVirtualAccountDto(va, await accountOwner(userId)) };
 }, 201);
 
 export const myDepositsHandler = wrap(async (req) => {

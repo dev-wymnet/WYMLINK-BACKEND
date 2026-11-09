@@ -8,18 +8,20 @@ import {
   getWalletDetails,
   listMyTransactions,
 } from "../service/wallet.service.js";
+import { accountOwner, displayAccountName } from "../../banking/account.service.js";
 
 export const myWalletHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
     const { wallet, virtualAccount: va } = await getWalletDetails(req.user.id);
+    const accountName = va ? displayAccountName(va.accountName, await accountOwner(req.user.id)) : null;
     res.status(200).json({
       balance: wallet.availableBalance,
       currency: wallet.currencyCode,
       status: wallet.status,
       accountNumber: va?.accountNumber ?? null,
       bankName: va?.bankName ?? null,
-      reservedAccount: va ? { accountName: va.accountName, accountNumber: va.accountNumber, bankName: va.bankName } : null,
+      reservedAccount: va ? { accountName, accountNumber: va.accountNumber, bankName: va.bankName } : null,
     });
   } catch (err) {
     next(err);
