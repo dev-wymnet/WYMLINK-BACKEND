@@ -47,21 +47,47 @@ async function usage(ex: Tx | typeof db, eventId: string, where: SQL) {
   return { total: parseMoneyToCents(row.total), count: Number(row.n) };
 }
 
-// Checks the purchase against the active event and returns its id. Runs inside the order's
-// transaction and locks the event row, so concurrent free purchases are checked one at a
-// time against everything committed before them (no allowance can be overspent by racing).
+// Checks the purchase against the running event's allowances and returns the event's id.
+// Runs inside the order's transaction. Concurrency: the customer and the recipient are each
+// locked (transaction advisory locks), so two purchases for the same person or the same
+// phone/smartcard are checked one after the other, while different customers don't wait on
+// each other. After the order is inserted, commitPromo adds it to the event's running total
+// in one short row update that also re-checks the budget and that the event is still on
+// (the kill switch), so neither can be overrun by purchases racing each other.
 export async function claimPromo(tx: Tx, userId: string, claim: PromoClaim): Promise<string> {
-  const rows = await tx.execute(sql`select * from app.promo_events where active for update`);
+  const rows = await tx.execute(sql`select * from app.promo_events where active`);
   const ev = rows.rows[0] as Record<string, any> | undefined;
   if (!ev) throw new PromoUnavailableError("The free event has ended. Nothing was charged.");
   const eventId = String(ev.id);
+  if (claim.product !== "data" && claim.product !== "airtime" && claim.product !== "cable") {
+    throw new PromoUnavailableError("This purchase isn't part of the free event.");
+  }
+  if (claim.product === "cable" && !((ev.tv_plans as string[]) ?? []).includes(claim.planCode)) {
+    throw new PromoUnavailableError("Only the base plan of each TV provider is free during the event.");
+  }
+
+  // One customer, one recipient at a time (always in this order: no lock cycles).
+  await tx.execute(sql`
+    select pg_advisory_xact_lock(hashtextextended(${`promo:user:${userId}`}, 0)),
+           pg_advisory_xact_lock(hashtextextended(${`promo:recipient:${claim.recipient}`}, 0))`);
+
+  // Everything this customer and this recipient have used so far, in one read (taken after
+  // the locks, so it includes any purchase that held them before).
+  const provider = claim.product === "cable" ? claim.provider : "";
+  const u = (
+    await tx.execute(sql`
+      select coalesce(sum(amount) filter (where user_id = ${userId}::uuid and product = ${claim.product}), 0)::numeric(18,2)::text as mine_total,
+             coalesce(sum(amount) filter (where recipient = ${claim.recipient} and product = ${claim.product}), 0)::numeric(18,2)::text as theirs_total,
+             count(*) filter (where user_id = ${userId}::uuid and product = 'cable' and service = ${provider})::int as mine_tv,
+             count(*) filter (where recipient = ${claim.recipient} and product = 'cable')::int as card_tv
+        from app.vtu_orders
+       where promo_event_id = ${eventId}::uuid and ${COUNTED} and (user_id = ${userId}::uuid or recipient = ${claim.recipient})`)
+  ).rows[0] as { mine_total: string; theirs_total: string; mine_tv: number; card_tv: number };
 
   if (claim.product === "data" || claim.product === "airtime") {
     const max = parseMoneyToCents(String(claim.product === "data" ? ev.data_max : ev.airtime_max));
     const label = claim.product === "data" ? "data" : "airtime";
-    const product = sql`product = ${claim.product}`;
-    const mine = await usage(tx, eventId, sql`${product} and user_id = ${userId}::uuid`);
-    const left = max - mine.total;
+    const left = max - parseMoneyToCents(u.mine_total);
     if (claim.amountCents > left) {
       throw new PromoUnavailableError(
         left <= 0n
@@ -69,8 +95,7 @@ export async function claimPromo(tx: Tx, userId: string, claim: PromoClaim): Pro
           : `You have ${naira(left)} of free ${label} left. Choose a smaller amount.`,
       );
     }
-    const theirs = await usage(tx, eventId, sql`${product} and recipient = ${claim.recipient}`);
-    const leftFor = max - theirs.total;
+    const leftFor = max - parseMoneyToCents(u.theirs_total);
     if (claim.amountCents > leftFor) {
       throw new PromoUnavailableError(
         leftFor <= 0n
@@ -78,33 +103,37 @@ export async function claimPromo(tx: Tx, userId: string, claim: PromoClaim): Pro
           : `This number has ${naira(leftFor)} of free ${label} left.`,
       );
     }
-  } else if (claim.product === "cable") {
-    const plans = (ev.tv_plans as string[]) ?? [];
-    if (!plans.includes(claim.planCode)) {
-      throw new PromoUnavailableError("Only the base plan of each TV provider is free during the event.");
-    }
-    const perProvider = Number(ev.tv_per_provider);
-    const mine = await usage(tx, eventId, sql`product = 'cable' and service = ${claim.provider} and user_id = ${userId}::uuid`);
-    if (mine.count >= perProvider) {
-      throw new PromoUnavailableError(`You've already used your free ${claim.provider.toUpperCase()} subscription.`);
-    }
-    const card = await usage(tx, eventId, sql`product = 'cable' and recipient = ${claim.recipient}`);
-    if (card.count >= perProvider) {
-      throw new PromoUnavailableError("This smartcard has already had its free subscription.");
-    }
   } else {
-    throw new PromoUnavailableError("This purchase isn't part of the free event.");
-  }
-
-  if (ev.budget !== null && ev.budget !== undefined) {
-    const budget = parseMoneyToCents(String(ev.budget));
-    const spent = await usage(tx, eventId, sql`true`);
-    if (spent.total + claim.amountCents > budget) {
-      logger.warn({ eventId, spent: centsToMoneyString(spent.total) }, "promo_budget_reached");
-      throw new PromoUnavailableError("Today's free allowance has all been given out. Nothing was charged.");
+    const perProvider = Number(ev.tv_per_provider);
+    if (Number(u.mine_tv) >= perProvider) {
+      throw new PromoUnavailableError(`You've already used your free ${provider.toUpperCase()} subscription.`);
+    }
+    if (Number(u.card_tv) >= perProvider) {
+      throw new PromoUnavailableError("This smartcard has already had its free subscription.");
     }
   }
   return eventId;
+}
+
+// The last step before the free order's transaction commits: adds it to the event's running
+// total if the event is still on and the budget (if any) covers it. The event row is locked
+// only from here to the commit, so purchases queue on it for one short update each.
+export async function commitPromo(tx: Tx, eventId: string, amountCents: bigint) {
+  const amount = centsToMoneyString(amountCents);
+  const done = await tx.execute(sql`
+    update app.promo_events set committed = committed + ${amount}::numeric
+     where id = ${eventId}::uuid and active and (budget is null or committed + ${amount}::numeric <= budget)
+     returning id`);
+  if (done.rows.length) return;
+  const [ev] = (await tx.execute(sql`select active, committed::text as committed from app.promo_events where id = ${eventId}::uuid`)).rows as Array<{ active: boolean; committed: string }>;
+  if (!ev?.active) throw new PromoUnavailableError("The free event has ended. Nothing was charged.");
+  logger.warn({ eventId, committed: ev.committed }, "promo_budget_reached");
+  throw new PromoUnavailableError("Today's free allowance has all been given out. Nothing was charged.");
+}
+
+// A free order that failed gives its share of the budget back (same transaction as closing it).
+export async function releasePromo(tx: Tx, eventId: string, amount: string) {
+  await tx.execute(sql`update app.promo_events set committed = greatest(committed - ${amount}::numeric, 0) where id = ${eventId}::uuid`);
 }
 
 // ---------- TV base plans (names and prices from Peyflex, cached) ----------

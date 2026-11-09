@@ -8,7 +8,7 @@ import { logger } from "../../core/logger/logger.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../core/utils/money.js";
 import { enforceSpendLimit } from "../compliance/service/limits.service.js";
 import { getOrCreateWallet, postEntry } from "../wallet/repository/wallet.repository.js";
-import { claimPromo, type PromoClaim } from "../promo/promo.service.js";
+import { claimPromo, commitPromo, releasePromo, type PromoClaim } from "../promo/promo.service.js";
 import type { ProviderOutcome } from "./providers/types.js";
 
 export type VtuOrder = typeof vtuOrders.$inferSelect;
@@ -83,7 +83,8 @@ function replay(existing: VtuOrder, spec: OrderSpec) {
 // provider exactly once. Outcome: success; failed → refunded at once; unknown
 // → held for staff to resolve (never resent, never auto-refunded).
 // With `promo`, the order is a free event purchase: the event's allowances are checked
-// in the same transaction (claimPromo) and the wallet is not touched.
+// in the same transaction (claimPromo, then commitPromo for the budget and the kill switch)
+// and the wallet is not touched.
 export async function placeOrder(spec: OrderSpec, send: () => Promise<ProviderOutcome>, opts: { promo?: PromoClaim } = {}) {
   if (spec.amountCents <= 0n) throw new ValidationError("Invalid amount");
 
@@ -116,6 +117,7 @@ export async function placeOrder(spec: OrderSpec, send: () => Promise<ProviderOu
             promoEventId,
           })
           .returning();
+        await commitPromo(tx, promoEventId, spec.amountCents);
         return created!;
       }
       // Lock the wallet before checking limits: concurrent purchases by one user queue
@@ -225,7 +227,9 @@ export async function refundOrder(
     if (o.status === "refunded") return o;
     if (o.status === "success") throw new ValidationError("A delivered order can't be refunded here");
     if (o.promoEventId) {
-      // Free event order: nothing was taken, so it is only closed (no wallet credit).
+      // Free event order: nothing was taken, so it is only closed (no wallet credit), and
+      // its share of the event's budget is given back.
+      await releasePromo(tx, o.promoEventId, o.amount);
       const [closed] = await tx
         .update(vtuOrders)
         .set({ ...outcome, status: "refunded", completedAt: new Date(), nextCheckAt: null })

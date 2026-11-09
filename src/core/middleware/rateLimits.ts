@@ -46,12 +46,14 @@ export function limiter(input: {
   });
 }
 
-// The API-wide limit. Anonymous requests: `max` per IP. Signed-in requests (they carry an
-// access token): `max` per token, plus a per-IP ceiling `venueFactor` times higher, since a
-// conference Wi-Fi or a carrier's CGNAT puts hundreds of customers on one IP. The token is
-// not verified here (authGuard does that), so the IP ceiling still bounds made-up tokens.
-export function apiLimiter(input: { windowMs: number; max: number; venueFactor: number }): RequestHandler {
-  const anonymous = limiter({ windowMs: input.windowMs, max: input.max });
+// The API-wide limit. Anonymous requests (sign-up, sign-in, QR lookups): `max` ×
+// `anonymousFactor` per IP; each of those routes also has its own, stricter limits.
+// Signed-in requests (they carry an access token): `max` per token, plus a per-IP ceiling
+// `venueFactor` times higher, since a conference Wi-Fi or a carrier's CGNAT puts hundreds of
+// customers on one IP. The token is not verified here (authGuard does that), so the IP
+// ceiling still bounds made-up tokens.
+export function apiLimiter(input: { windowMs: number; max: number; anonymousFactor: number; venueFactor: number }): RequestHandler {
+  const anonymous = limiter({ windowMs: input.windowMs, max: input.max * input.anonymousFactor });
   const perToken = limiter({ windowMs: input.windowMs, max: input.max, by: "bearer" });
   const perIp = limiter({ windowMs: input.windowMs, max: input.max * input.venueFactor });
   return (req, res, next) => {

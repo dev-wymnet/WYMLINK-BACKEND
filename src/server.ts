@@ -56,7 +56,7 @@ export function createServer(): Express {
     }),
   );
 
-  app.use(apiLimiter({ windowMs: config.RATE_LIMIT_WINDOW_MS, max: config.RATE_LIMIT_MAX, venueFactor: 30 }));
+  app.use(apiLimiter({ windowMs: config.RATE_LIMIT_WINDOW_MS, max: config.RATE_LIMIT_MAX, anonymousFactor: 3, venueFactor: 30 }));
 
   app.use(
     express.json({

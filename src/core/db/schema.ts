@@ -463,6 +463,7 @@ export const promoEvents = app.table("promo_events", {
   tvPlans: text("tv_plans").array().notNull(),
   tvPerProvider: integer("tv_per_provider").notNull(),
   budget: money("budget"),
+  committed: money("committed").notNull().default("0"), // given out so far (db/migrations/0011)
   active: boolean("active").notNull().default(true),
   startedBy: uuid("started_by"),
   startedAt: ts("started_at").notNull().defaultNow(),
