@@ -75,8 +75,7 @@ export async function getCustomerAdmin(customerId: string) {
   if (!row || row.user.role !== "customer") throw new NotFoundError("Customer not found");
   const { user: u, kyc: k } = row;
   const wallet = await getCustomerWallet(customerId);
-  // The Moneta account number, or where it is: opening (also retries a failed attempt),
-  // verify (BVN + NIN not both approved), needs_details (verified before the BVN was kept).
+  // The Moneta account number, or "opening" (asking also retries a failed attempt).
   const va = await getMyVirtualAccount(customerId);
   const accountSetup = va ? null : await accountSetupState(customerId);
   const bvnStatus = up(k?.bvnStatus);

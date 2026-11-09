@@ -8,12 +8,10 @@ import {
   getWalletDetails,
   listMyTransactions,
 } from "../service/wallet.service.js";
-import { checkForDeposits } from "../../banking/account.service.js";
 
 export const myWalletHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
-    await checkForDeposits(req.user.id);
     const { wallet, virtualAccount: va } = await getWalletDetails(req.user.id);
     res.status(200).json({
       balance: wallet.availableBalance,

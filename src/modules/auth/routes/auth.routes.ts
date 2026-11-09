@@ -22,7 +22,8 @@ const loginIpFailLimiter = limiter({ windowMs: 15 * MIN, max: 50, failuresOnly: 
 const logoutLimiter = limiter({ windowMs: MIN, max: 30 });
 // Sign-up: tight per contact tried, loose per IP (many customers share a carrier IP).
 const signupLimiter = limiter({ windowMs: 60 * MIN, max: 5, by: "ip+identity" });
-const signupIpLimiter = limiter({ windowMs: 60 * MIN, max: 100 });
+// A conference Wi-Fi or carrier CGNAT puts many real sign-ups on one IP.
+const signupIpLimiter = limiter({ windowMs: 60 * MIN, max: 600 });
 const resetLimiter = limiter({ windowMs: 15 * MIN, max: 10, by: "ip+identity" });
 // Per session, not per IP: a shared IP must never stop customers refreshing (they'd be signed out).
 const refreshLimiter = limiter({ windowMs: MIN, max: 30, by: "session" });

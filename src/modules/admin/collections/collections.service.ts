@@ -101,7 +101,8 @@ async function owedRows(userId?: string): Promise<OwedRow[]> {
       left join (
         select user_id, sum(amount) as spent
           from app.vtu_orders
-         where status = 'success' and provider in ('peyflex', 'reloadly')
+         -- Free event orders (promo_event_id) were never taken from the customer.
+         where status = 'success' and provider in ('peyflex', 'reloadly') and promo_event_id is null
          group by user_id
       ) p on p.user_id = u.id
       left join (

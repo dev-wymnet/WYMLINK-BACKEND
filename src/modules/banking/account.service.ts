@@ -8,7 +8,7 @@ import { logger } from "../../core/logger/logger.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../core/utils/money.js";
 import { unseal } from "../../core/utils/seal.js";
 import { getKycProfile } from "../verification/repository/verification.repository.js";
-import { matchesVerifiedBvn, matchesVerifiedIdentity } from "../verification/service/verification.service.js";
+import { matchesVerifiedBvn } from "../verification/service/verification.service.js";
 import { findActiveVirtualAccount, getOrCreateWallet, postEntry } from "../wallet/repository/wallet.repository.js";
 import { createVirtualAccount, listCredits, type MonetaCredit } from "../moneta/moneta.partner.js";
 
@@ -40,10 +40,50 @@ export async function getMyVirtualAccount(userId: string) {
   return findActiveVirtualAccount(wallet.id);
 }
 
-// Opens the customer's Moneta account (BVN in plain digits; Moneta takes a NIN placeholder,
-// see createVirtualAccount), records it, and drops the encrypted BVN kept for it.
-async function createAndStore(user: typeof users.$inferSelect, walletId: string, bvn: string) {
-  const created = await createVirtualAccount({ firstName: user.firstName, surname: user.lastName, bvn });
+// ---------- Customer ID ----------
+
+const newCustomerCode = () => `WL${String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0")}`;
+
+// The customer's short unique ID ("WL" + 6 digits), created on first need. Also the name of
+// their Moneta account, so an account number seen at Moneta traces back to its owner.
+export async function ensureCustomerCode(userId: string): Promise<string> {
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const [u] = await db.select({ code: users.customerCode }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!u) throw new NotFoundError("User not found");
+    if (u.code) return u.code;
+    try {
+      const [set] = await db
+        .update(users)
+        .set({ customerCode: newCustomerCode() })
+        .where(and(eq(users.id, userId), sql`${users.customerCode} is null`))
+        .returning({ code: users.customerCode });
+      if (set?.code) return set.code;
+    } catch (err: any) {
+      if ((err?.code ?? err?.cause?.code) !== "23505") throw err; // taken: try another
+    }
+  }
+  throw new Error("Couldn't create a customer ID");
+}
+
+// ---------- Account numbers ----------
+
+// Opens the Moneta account, named with the customer ID. No BVN or NIN is needed: a verified
+// BVN kept from KYC is used when there is one, otherwise Moneta's placeholder.
+async function createAndStore(user: typeof users.$inferSelect, walletId: string) {
+  const code = user.customerCode ?? (await ensureCustomerCode(user.id));
+  let bvn: string | null = null;
+  const p = await getKycProfile(user.id).catch(() => null);
+  if (p?.bvnSealed) {
+    try {
+      const b = unseal(p.bvnSealed);
+      if (await matchesVerifiedBvn(user.id, b)) bvn = b;
+    } catch {
+      logger.error({ userId: user.id }, "va_open_unseal_failed");
+    }
+  }
+  // A business's account carries its name (payers see it), a customer's their customer ID.
+  const accountName = user.role === "business" ? user.firstName : code;
+  const created = await createVirtualAccount({ firstName: user.firstName, surname: user.lastName, bvn, accountName });
   if (!created.ok) {
     logger.warn({ userId: user.id, message: created.message }, "moneta_va_create_failed");
     throw new ValidationError(`We couldn't open your account: ${created.message}`);
@@ -61,83 +101,57 @@ async function createAndStore(user: typeof users.$inferSelect, walletId: string,
       raw: created.raw,
     })
     .returning();
-  await db.update(kycProfiles).set({ bvnSealed: null }).where(eq(kycProfiles.userId, user.id));
+  if (p?.bvnSealed) await db.update(kycProfiles).set({ bvnSealed: null }).where(eq(kycProfiles.userId, user.id));
   logger.info({ userId: user.id }, "moneta_va_opened");
   return va!;
 }
 
-// Opened automatically once BVN and NIN are verified (called by the KYC review and when
-// the app asks for the account), from the encrypted BVN kept since submission. Quiet
-// no-op when not eligible, already open, or an attempt is running. A failed attempt
-// keeps its lease, so the next automatic try waits for it to end (OPEN_LEASE_SECONDS).
-export async function issueAccountWhenReady(userId: string) {
+// Opens the account number of any customer (or business) that has none: right after sign-up,
+// and again whenever the apps ask for it. Quiet no-op when one exists or an attempt is
+// running. A failed attempt keeps its lease, so the next automatic try waits for it to end
+// (OPEN_LEASE_SECONDS): a Moneta outage costs at most one call per customer per 5 minutes.
+export async function issueAccount(userId: string): Promise<VirtualAccount | null> {
   const user = (await db.select().from(users).where(eq(users.id, userId)).limit(1))[0];
-  if (!user || user.kycTier < 2) return;
-  const wallet = await getOrCreateWallet(user.id);
-  if (await findActiveVirtualAccount(wallet.id)) return;
-  const p = await getKycProfile(user.id);
-  if (!p?.bvnSealed) return;
-  let bvn: string;
-  try {
-    bvn = unseal(p.bvnSealed);
-  } catch {
-    logger.error({ userId }, "va_auto_open_unseal_failed");
-    return;
-  }
-  if (!(await matchesVerifiedBvn(user.id, bvn))) {
-    logger.error({ userId }, "va_auto_open_bvn_mismatch");
-    return;
-  }
-  if (!(await claimOpening(user.id))) return;
-  try {
-    if (!(await findActiveVirtualAccount(wallet.id))) await createAndStore(user, wallet.id, bvn);
-    await releaseOpening(user.id).catch(() => undefined);
-  } catch (err) {
-    logger.warn({ userId, err: (err as Error).message }, "va_auto_open_attempt_failed");
-  }
-}
-
-// Where the customer is on the way to an account number, for the apps:
-// null (they have one) | "verify" (BVN + NIN not both verified) | "opening" (being opened
-// automatically) | "needs_details" (verified before Wymlink kept the BVN: re-enter it once).
-export async function accountSetupState(userId: string): Promise<"verify" | "opening" | "needs_details" | null> {
-  const user = (await db.select({ tier: users.kycTier }).from(users).where(eq(users.id, userId)).limit(1))[0];
-  if (await getMyVirtualAccount(userId)) return null;
-  if (!user || user.tier < 2) return "verify";
-  const p = await getKycProfile(userId);
-  if (!p?.bvnSealed) return "needs_details";
-  void issueAccountWhenReady(userId).catch(() => undefined);
-  return "opening";
-}
-
-// Manual opening, for customers verified before the BVN was kept: they re-enter BVN and
-// NIN, which must match the verified ones.
-export async function openVirtualAccount(input: { userId: string; bvn: string; nin: string }) {
-  const user = (await db.select().from(users).where(eq(users.id, input.userId)).limit(1))[0];
-  if (!user) throw new NotFoundError("User not found");
+  if (!user || (user.role !== "customer" && user.role !== "business") || user.status !== "active") return null;
   const wallet = await getOrCreateWallet(user.id);
   const existing = await findActiveVirtualAccount(wallet.id);
   if (existing) return existing;
-
-  if (!(await matchesVerifiedIdentity(user.id, input.bvn, input.nin))) {
-    throw new ValidationError(
-      user.kycTier < 2
-        ? "Verify your BVN and NIN first. Your account number is opened as soon as both are approved."
-        : "That BVN or NIN doesn't match the ones verified on your account.",
-    );
-  }
-
-  // One opening at a time per customer (Moneta allows one account per BVN).
-  if (!(await claimOpening(user.id))) {
-    throw new ValidationError("Your account number is already being set up. Check again in a minute.");
-  }
+  if (!(await claimOpening(user.id))) return null;
   try {
     const again = await findActiveVirtualAccount(wallet.id);
-    if (again) return again;
-    return await createAndStore(user, wallet.id, input.bvn);
-  } finally {
+    const va = again ?? (await createAndStore(user, wallet.id));
     await releaseOpening(user.id).catch(() => undefined);
+    return va;
+  } catch (err) {
+    logger.warn({ userId, err: (err as Error).message }, "va_open_attempt_failed");
+    return null;
   }
+}
+
+// Staff "try again": drops a failed attempt's lease first.
+export async function retryAccount(userId: string) {
+  await releaseOpening(userId).catch(() => undefined);
+  return issueAccount(userId);
+}
+
+// Kept for the KYC review, which used to open accounts on approval.
+export const issueAccountWhenReady = (userId: string) => issueAccount(userId).then(() => undefined);
+
+// Where the customer is on the way to an account number, for the apps: null (they have
+// one) or "opening" (being opened now). Asking starts an opening when none is running.
+export async function accountSetupState(userId: string): Promise<"opening" | null> {
+  if (await getMyVirtualAccount(userId)) return null;
+  void issueAccount(userId).catch(() => undefined);
+  return "opening";
+}
+
+// The apps' "get my account number": opens it now (no BVN or NIN needed).
+export async function openVirtualAccount(input: { userId: string }) {
+  const user = (await db.select().from(users).where(eq(users.id, input.userId)).limit(1))[0];
+  if (!user) throw new NotFoundError("User not found");
+  const va = await issueAccount(user.id);
+  if (va) return va;
+  throw new ValidationError("Your account number is being set up. Check again in a minute.");
 }
 
 // The per-customer opening lock is a short lease row in app.provider_tokens (the same
@@ -239,11 +253,12 @@ export async function syncDeposits(va: VirtualAccount) {
   return fresh;
 }
 
-// Moneta's payment notification doesn't always come, so a customer looking at their wallet
-// (home, wallet, deposits) also checks their account's Moneta history: at most once a
-// minute per customer, since each check is a proxied Moneta call. Waits briefly so a credit
-// that has landed shows in the same response; a slow Moneta never holds the page up.
-const DEPOSIT_CHECK_EVERY_MS = 60_000;
+// Moneta's payment notification credits deposits within seconds. As a fallback, a customer
+// opening their deposits list also checks their account's Moneta history: at most once every
+// 10 minutes per customer, since each check spends the proxy's monthly request quota (home
+// and wallet screens no longer check: with every customer holding an account, that would
+// spend it in hours). Waits briefly so a credit that has landed shows in the same response.
+const DEPOSIT_CHECK_EVERY_MS = 10 * 60_000;
 const DEPOSIT_CHECK_WAIT_MS = 6_000;
 const lastDepositCheck = new Map<string, number>();
 

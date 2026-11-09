@@ -61,7 +61,8 @@ export async function findRecipient(query: string, senderId: string) {
 
 function check(row: { user: typeof users.$inferSelect; va: typeof virtualAccounts.$inferSelect }, senderId: string) {
   if (row.user.id === senderId) throw new ValidationError("You can't send money to yourself");
-  if (row.user.status !== "active" || row.user.role !== "customer") throw new NotFoundError("No Wymlink account found.");
+  // Customers, and WymNet's businesses (paid by QR code, modules/business).
+  if (row.user.status !== "active" || (row.user.role !== "customer" && row.user.role !== "business")) throw new NotFoundError("No Wymlink account found.");
   return { userId: row.user.id, name: `${row.user.firstName} ${row.user.lastName}`.trim(), accountNumber: row.va.accountNumber, va: row.va };
 }
 

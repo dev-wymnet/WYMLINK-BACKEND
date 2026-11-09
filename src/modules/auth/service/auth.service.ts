@@ -84,6 +84,11 @@ export async function signup(
   }
 
   logger.info({ userId }, "auth_signup");
+  // Customer ID now; account number (no BVN or NIN needed) opened in the background, so
+  // sign-up never waits on Moneta. The apps show "being set up" until it lands.
+  const accounts = await import("../../banking/account.service.js");
+  await accounts.ensureCustomerCode(userId).catch((err) => logger.warn({ userId, err: (err as Error).message }, "customer_code_failed"));
+  void accounts.issueAccount(userId).catch((err) => logger.warn({ userId, err: (err as Error).message }, "va_open_after_signup_failed"));
   return issueTokens({ userId, role }, ctx);
 }
 

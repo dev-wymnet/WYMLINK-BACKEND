@@ -3,7 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { pinoHttp } from "pino-http";
 import compression from "compression";
-import { limiter } from "./core/middleware/rateLimits.js";
+import { apiLimiter } from "./core/middleware/rateLimits.js";
 import { randomUUID } from "crypto";
 
 import { config } from "./core/config/index.js";
@@ -29,6 +29,8 @@ import { qrRoutes } from "./modules/qr/qr.routes.js";
 import { accountRoutes, adminBankingRoutes, payoutRoutes, transferRoutes } from "./modules/banking/banking.routes.js";
 import { adminCollectionsRoutes } from "./modules/admin/collections/collections.routes.js";
 import { monetaWebhookRoutes } from "./modules/moneta/moneta.webhook.js";
+import { adminPromoRoutes, promoRoutes } from "./modules/promo/promo.routes.js";
+import { adminBusinessRoutes, businessRoutes } from "./modules/business/business.routes.js";
 import { adminAuthRoutes } from "./modules/admin/auth/routes/adminAuth.routes.js";
 import { adminManagementRoutes } from "./modules/admin/management/routes/admin.routes.js";
 import { adminPaymentsRoutes } from "./modules/admin/payments/routes/payments.routes.js";
@@ -54,8 +56,7 @@ export function createServer(): Express {
     }),
   );
 
-  const rateLimiter = limiter({ windowMs: config.RATE_LIMIT_WINDOW_MS, max: config.RATE_LIMIT_MAX });
-  app.use(rateLimiter);
+  app.use(apiLimiter({ windowMs: config.RATE_LIMIT_WINDOW_MS, max: config.RATE_LIMIT_MAX, venueFactor: 30 }));
 
   app.use(
     express.json({
@@ -149,6 +150,8 @@ export function createServer(): Express {
   api.use("/training", trainingRoutes);
   api.use("/updates", updatesRoutes);
   api.use("/qr", qrRoutes);
+  api.use("/promo", promoRoutes);
+  api.use("/businesses", businessRoutes);
   api.use("/payouts", payoutRoutes);
   api.use("/webhooks", monetaWebhookRoutes);
   api.use("/logos", logoRoutes);
@@ -162,6 +165,8 @@ export function createServer(): Express {
   admin.use("/customers", adminCustomersRoutes);
   admin.use("/banking", adminBankingRoutes);
   admin.use("/collections", adminCollectionsRoutes);
+  admin.use("/promo", adminPromoRoutes);
+  admin.use("/businesses", adminBusinessRoutes);
   admin.use("/support", adminSupportRoutes);
   api.use("/admin", admin);
 

@@ -8,6 +8,7 @@ import { logger } from "../../core/logger/logger.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../core/utils/money.js";
 import { enforceSpendLimit } from "../compliance/service/limits.service.js";
 import { getOrCreateWallet, postEntry } from "../wallet/repository/wallet.repository.js";
+import { claimPromo, type PromoClaim } from "../promo/promo.service.js";
 import type { ProviderOutcome } from "./providers/types.js";
 
 export type VtuOrder = typeof vtuOrders.$inferSelect;
@@ -55,7 +56,9 @@ export function toOrderDto(o: VtuOrder) {
     amount: o.amount,
     status,
     orderStatus: o.status,
-    refunded: o.status === "refunded",
+    // A free event order took nothing from the wallet, so there is nothing to refund.
+    refunded: o.status === "refunded" && !o.promoEventId,
+    promo: Boolean(o.promoEventId),
     token: o.token,
     units: o.units,
     lastError: status === "failed" ? o.lastError : null,
@@ -79,7 +82,9 @@ function replay(existing: VtuOrder, spec: OrderSpec) {
 // Debits the wallet and records the order in one transaction, then calls the
 // provider exactly once. Outcome: success; failed → refunded at once; unknown
 // → held for staff to resolve (never resent, never auto-refunded).
-export async function placeOrder(spec: OrderSpec, send: () => Promise<ProviderOutcome>) {
+// With `promo`, the order is a free event purchase: the event's allowances are checked
+// in the same transaction (claimPromo) and the wallet is not touched.
+export async function placeOrder(spec: OrderSpec, send: () => Promise<ProviderOutcome>, opts: { promo?: PromoClaim } = {}) {
   if (spec.amountCents <= 0n) throw new ValidationError("Invalid amount");
 
   const existing = await findByReference(spec.reference);
@@ -88,9 +93,33 @@ export async function placeOrder(spec: OrderSpec, send: () => Promise<ProviderOu
   let order: VtuOrder;
   try {
     order = await db.transaction(async (tx) => {
+      const wallet = await getOrCreateWallet(spec.userId, tx);
+      if (opts.promo) {
+        const promoEventId = await claimPromo(tx, spec.userId, opts.promo);
+        const [created] = await tx
+          .insert(vtuOrders)
+          .values({
+            userId: spec.userId,
+            walletId: wallet.id,
+            reference: spec.reference,
+            product: spec.product,
+            provider: spec.provider,
+            service: spec.service,
+            planCode: spec.planCode ?? null,
+            planName: spec.planName ?? null,
+            recipient: spec.recipient,
+            recipientName: spec.recipientName ?? null,
+            meterType: spec.meterType ?? null,
+            amount: centsToMoneyString(spec.amountCents),
+            status: "processing",
+            attempts: 1,
+            promoEventId,
+          })
+          .returning();
+        return created!;
+      }
       // Lock the wallet before checking limits: concurrent purchases by one user queue
       // here, so each limit check sees the debits committed before it.
-      const wallet = await getOrCreateWallet(spec.userId, tx);
       await tx.execute(sql`select 1 from app.wallets where id = ${wallet.id}::uuid for update`);
       await enforceSpendLimit(tx, { userId: spec.userId, amountCents: spec.amountCents });
       const [created] = await tx
@@ -195,6 +224,15 @@ export async function refundOrder(
     if (!o) throw new NotFoundError("Order not found");
     if (o.status === "refunded") return o;
     if (o.status === "success") throw new ValidationError("A delivered order can't be refunded here");
+    if (o.promoEventId) {
+      // Free event order: nothing was taken, so it is only closed (no wallet credit).
+      const [closed] = await tx
+        .update(vtuOrders)
+        .set({ ...outcome, status: "refunded", completedAt: new Date(), nextCheckAt: null })
+        .where(eq(vtuOrders.id, o.id))
+        .returning();
+      return closed!;
+    }
     const credit = await postEntry(tx, {
       walletId: o.walletId,
       direction: "credit",

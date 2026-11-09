@@ -38,6 +38,7 @@ export const users = app.table("users", {
   kycTier: smallint("kyc_tier").notNull().default(0),
   reloadlyEnabled: boolean("reloadly_enabled").notNull().default(false),
   mustChangePassword: boolean("must_change_password").notNull().default(false),
+  customerCode: text("customer_code"),
   lastLoginAt: ts("last_login_at"),
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
@@ -263,6 +264,7 @@ export const vtuOrders = app.table("vtu_orders", {
   nextCheckAt: ts("next_check_at"),
   debitEntryId: uuid("debit_entry_id"),
   refundEntryId: uuid("refund_entry_id"),
+  promoEventId: uuid("promo_event_id"), // set: a free event order (no wallet debit)
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
   completedAt: ts("completed_at"),
@@ -449,4 +451,33 @@ export const collections = app.table("collections", {
   createdAt: ts("created_at").notNull().defaultNow(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
   completedAt: ts("completed_at"),
+});
+
+// Free-purchase events (db/migrations/0010_events_businesses_codes.sql).
+export const promoEvents = app.table("promo_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  dataMax: money("data_max").notNull(),
+  airtimeMax: money("airtime_max").notNull(),
+  tvPlans: text("tv_plans").array().notNull(),
+  tvPerProvider: integer("tv_per_provider").notNull(),
+  budget: money("budget"),
+  active: boolean("active").notNull().default(true),
+  startedBy: uuid("started_by"),
+  startedAt: ts("started_at").notNull().defaultNow(),
+  endedBy: uuid("ended_by"),
+  endedAt: ts("ended_at"),
+  createdAt: ts("created_at").notNull().defaultNow(),
+});
+
+// WymNet's own businesses, paid by QR code into their own internal account.
+export const businesses = app.table("businesses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull(),
+  name: text("name").notNull(),
+  code: text("code").notNull(),
+  active: boolean("active").notNull().default(true),
+  createdBy: uuid("created_by"),
+  createdAt: ts("created_at").notNull().defaultNow(),
 });

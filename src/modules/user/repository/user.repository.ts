@@ -102,6 +102,7 @@ export function toUserDto(u: User) {
     phoneVerified: Boolean(u.phoneVerifiedAt),
     role: u.role,
     status: u.status,
+    customerCode: u.customerCode,
     kycTier: u.kycTier,
     countryCode: "NG",
     currencyCode: "NGN",

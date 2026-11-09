@@ -50,11 +50,12 @@ export async function getDashboardHome(userId: string) {
     .slice(0, 5);
 
   return {
-    user: { id: user.id, fullName: `${user.firstName} ${user.lastName}`.trim(), email: user.email, phone: user.phone },
+    user: { id: user.id, fullName: `${user.firstName} ${user.lastName}`.trim(), email: user.email, phone: user.phone, customerCode: user.customerCode },
     wallet: {
       balance: num(wallet.availableBalance),
       currency: wallet.currencyCode,
       accountNumber: virtualAccount?.accountNumber ?? "",
+      accountName: virtualAccount?.accountName ?? "",
       bankName: virtualAccount?.bankName ?? "",
     },
     analytics: {

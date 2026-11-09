@@ -100,17 +100,42 @@ function fieldErrorsOf(r: MonetaResponse) {
   return parts.length ? parts.join("; ").slice(0, 300) : null;
 }
 
-export async function createVirtualAccount(input: { firstName: string; surname: string; bvn: string }) {
+// Accounts are opened without the customer's BVN (Moneta's documented placeholder, as Etico
+// does in production) unless a verified one is given.
+const BVN_PLACEHOLDER = "00000000000";
+
+// Moneta may want letters only in account_name (it does in the name fields). If it refuses
+// digits once, the ID is spelt in letters from then on (0→A … 9→J: still unique), so each
+// later opening costs one call, not two.
+let nameDigitsRefused = false;
+const spelt = (name: string) => name.replace(/\d/g, (d) => String.fromCharCode(65 + Number(d)));
+
+// `accountName` (at most 8 letters/digits) is what Moneta shows after "WYMNET-": the
+// customer ID, so every account number traces back to its owner. Defaults to the first name.
+export async function createVirtualAccount(input: { firstName: string; surname: string; bvn?: string | null; accountName?: string | null }) {
   const first = lettersOnly(input.firstName) || lettersOnly(input.surname) || "User";
   const last = lettersOnly(input.surname) || first;
-  const r = await call("POST", "/partner/virtual-accounts", {
-    account_name: first.slice(0, 8),
-    account_type: "static",
-    surname: last,
-    first_name: first,
-    bvn: input.bvn,
-    nin: NIN_PLACEHOLDER,
-  });
+  const wanted = (input.accountName ?? "").replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || first.slice(0, 8);
+  const open = (accountName: string) =>
+    call("POST", "/partner/virtual-accounts", {
+      account_name: accountName,
+      account_type: "static",
+      surname: last,
+      first_name: first,
+      bvn: input.bvn && /^\d{11}$/.test(input.bvn) ? input.bvn : BVN_PLACEHOLDER,
+      nin: NIN_PLACEHOLDER,
+    });
+  let r = await open(nameDigitsRefused ? spelt(wanted) : wanted);
+  // A plain refusal (4xx, nothing created) of a name with digits: try once in letters.
+  if (!ok(r) && !nameDigitsRefused && /\d/.test(wanted) && r.status >= 400 && r.status < 500 && !r.json?.data?.virtual_account_reference) {
+    const refused = { http: r.status, message: messageOf(r), fields: fieldErrorsOf(r) };
+    r = await open(spelt(wanted));
+    // Only a success in letters proves the digits were the problem.
+    if (ok(r) && r.json?.data?.virtual_account_reference) {
+      nameDigitsRefused = true;
+      logger.warn(refused, "moneta_account_name_digits_refused");
+    }
+  }
   const d = r.json?.data ?? {};
   if (!ok(r) || !d.virtual_account_reference || !/^\d{10}$/.test(String(d.account_number ?? ""))) {
     const fields = fieldErrorsOf(r);

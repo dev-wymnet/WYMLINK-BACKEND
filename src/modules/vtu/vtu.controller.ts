@@ -9,6 +9,7 @@ import { normalizePhone } from "../../core/utils/identity.js";
 import { parseMoneyToCents } from "../../core/utils/money.js";
 import { verifyTransactionPin } from "../auth/service/pin.service.js";
 import { findUserById } from "../user/repository/user.repository.js";
+import { PromoUnavailableError } from "../promo/promo.service.js";
 import { peyflex } from "./providers/peyflex.js";
 import { reloadlyAirtime } from "./providers/reloadly.js";
 import { getMyOrder, listMyOrders, placeOrder, toOrderDto } from "./vtu.service.js";
@@ -81,16 +82,21 @@ export const electricityVerifyHandler = wrap(async (req) => {
 });
 
 // ---------- Purchases (PIN-approved; prices always come from the provider) ----------
+// `promo: true` asks for a free event purchase (modules/promo): refused, never charged,
+// when no event is running or the allowance doesn't cover it.
+
+const promo = z.boolean().optional();
 
 export const buyAirtimeHandler = wrap(async (req) => {
   const userId = userOf(req);
   const body = z
-    .object({ internalReference: reference, network: z.string().min(1).max(50), amount: z.number().int().min(AIRTIME_MIN).max(AIRTIME_MAX), mobileNumber: z.string().min(7).max(20), transactionPin: pin })
+    .object({ internalReference: reference, network: z.string().min(1).max(50), amount: z.number().int().min(AIRTIME_MIN).max(AIRTIME_MAX), mobileNumber: z.string().min(7).max(20), transactionPin: pin, promo })
     .parse(req.body ?? {});
   await verifyTransactionPin({ userId, pin: body.transactionPin });
 
   const user = await findUserById(userId);
-  const viaReloadly = Boolean(user?.reloadlyEnabled);
+  // Free event airtime is always bought from Peyflex.
+  const viaReloadly = Boolean(user?.reloadlyEnabled) && !body.promo;
   if (!viaReloadly) requirePeyflex();
   const phone = normalizePhone(body.mobileNumber);
 
@@ -109,6 +115,7 @@ export const buyAirtimeHandler = wrap(async (req) => {
       viaReloadly
         ? reloadlyAirtime({ reference: body.internalReference, amount: body.amount, mobileNumber: phone })
         : peyflex.buyAirtime({ network: body.network, amount: body.amount, mobileNumber: localPhone(phone) }),
+    body.promo ? { promo: { product: "airtime", recipient: phone, amountCents: naira(body.amount) } } : {},
   );
   return { transaction: toOrderDto(order) };
 });
@@ -116,7 +123,7 @@ export const buyAirtimeHandler = wrap(async (req) => {
 export const buyDataHandler = wrap(async (req) => {
   const userId = userOf(req);
   const body = z
-    .object({ internalReference: reference, network: z.string().min(1).max(50), planCode: z.string().min(1).max(100), mobileNumber: z.string().min(7).max(20), transactionPin: pin })
+    .object({ internalReference: reference, network: z.string().min(1).max(50), planCode: z.string().min(1).max(100), mobileNumber: z.string().min(7).max(20), transactionPin: pin, promo })
     .parse(req.body ?? {});
   await verifyTransactionPin({ userId, pin: body.transactionPin });
   requirePeyflex();
@@ -141,6 +148,7 @@ export const buyDataHandler = wrap(async (req) => {
       description: `${planName} data to ${localPhone(phone)}`,
     },
     () => peyflex.buyData({ network: body.network, planCode: body.planCode, mobileNumber: localPhone(phone) }),
+    body.promo ? { promo: { product: "data", recipient: phone, amountCents: naira(price) } } : {},
   );
   return { transaction: toOrderDto(order) };
 });
@@ -157,6 +165,7 @@ export const buyCableHandler = wrap(async (req) => {
       // Ignored: the price is the plan's price. Kept for older clients.
       amount: z.number().optional(),
       transactionPin: pin,
+      promo,
     })
     .parse(req.body ?? {});
   await verifyTransactionPin({ userId, pin: body.transactionPin });
@@ -184,6 +193,7 @@ export const buyCableHandler = wrap(async (req) => {
       description: `${planName} for ${body.iuc}`,
     },
     () => peyflex.buyCable({ identifier: body.identifier, plan: body.plan, iuc: body.iuc, phone: localPhone(phone), amount: price }),
+    body.promo ? { promo: { product: "cable", provider: body.identifier, planCode: body.plan, recipient: body.iuc, amountCents: naira(price) } } : {},
   );
   return { transaction: toOrderDto(order) };
 });
@@ -200,8 +210,10 @@ export const buyElectricityHandler = wrap(async (req) => {
       phone: z.string().min(7).max(20),
       providerName: z.string().max(100).optional(),
       transactionPin: pin,
+      promo,
     })
     .parse(req.body ?? {});
+  if (body.promo) throw new PromoUnavailableError("Electricity isn't part of the free event.");
   if (Math.round(body.amount * 100) !== body.amount * 100) throw new ValidationError("Invalid amount");
   await verifyTransactionPin({ userId, pin: body.transactionPin });
   requirePeyflex();

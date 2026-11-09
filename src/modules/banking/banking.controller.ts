@@ -65,11 +65,9 @@ export const myVirtualAccountHandler = wrap(async (req) => {
   return { account: va ? toVirtualAccountDto(va) : null, setup: va ? null : await accountSetupState(userId) };
 });
 
+// No BVN or NIN needed any more; older apps still send them and they are ignored.
 export const openVirtualAccountHandler = wrap(async (req) => {
-  const userId = userOf(req);
-  // NIN: Moneta's docs say 10 digits, real NINs are 11; both are accepted.
-  const body = z.object({ bvn: z.string().regex(/^\d{11}$/, "Your BVN is 11 digits"), nin: z.string().regex(/^\d{10,11}$/, "Enter your NIN") }).parse(req.body ?? {});
-  const va = await openVirtualAccount({ userId, bvn: body.bvn, nin: body.nin });
+  const va = await openVirtualAccount({ userId: userOf(req) });
   return { account: toVirtualAccountDto(va) };
 }, 201);
 
