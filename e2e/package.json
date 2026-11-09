@@ -1,0 +1,13 @@
+{
+  "name": "wymlink-e2e",
+  "private": true,
+  "type": "module",
+  "description": "Local end-to-end checks: embedded Postgres, fake Peyflex and Moneta. Never touches live services.",
+  "dependencies": {
+    "embedded-postgres": "17.5.0-beta.15",
+    "jsqr": "1.4.0",
+    "pg": "^8.13.0",
+    "playwright-core": "1.56.1",
+    "pngjs": "7.0.0"
+  }
+}
