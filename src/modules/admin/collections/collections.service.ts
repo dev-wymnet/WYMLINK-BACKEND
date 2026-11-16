@@ -10,6 +10,11 @@ import { logger } from "../../../core/logger/logger.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../../core/utils/money.js";
 import { insertAuditLog } from "../../audit/repository/audit.repository.js";
 import { findPayout, getVirtualAccountBalance, listBanks, payout, resolveAccount } from "../../moneta/moneta.partner.js";
+import { emailTeam } from "../alerts/opsAlerts.js";
+
+// Every Moneta call here uses the background tunnel: customers' payments never queue
+// behind a collection run (see moneta.http.ts).
+const LANE = "background" as const;
 
 // Collections move the money customers spent on purchases out of their Moneta accounts
 // into WymNet's bank account (see db/migrations/0009_collections.sql).
@@ -21,7 +26,8 @@ import { findPayout, getVirtualAccountBalance, listBanks, payout, resolveAccount
 // out of the VA on top of the amount sent, so WymNet sends (that − fee) and absorbs the
 // fee: the VA then ends equal to the customer's wallet balance.
 
-type Staff = { id: string; role?: string | undefined; ip?: string | undefined; userAgent?: string | undefined };
+// `id: null` is the automatic daily run (autoCollect.ts).
+type Staff = { id: string | null; role?: string | undefined; ip?: string | undefined; userAgent?: string | undefined };
 type Collection = typeof collections.$inferSelect;
 
 const naira = (n: number) => parseMoneyToCents(n.toFixed(2));
@@ -67,6 +73,14 @@ export async function setCollectionAccount(input: { bankCode: string; accountNum
     accountNumber: created.accountNumber,
     accountName: created.accountName,
   });
+  // Customers' money is paid here automatically every day, so every change is announced.
+  void emailTeam("Wymlink: the collection account was changed", [
+    "Money customers spend on purchases is now collected into this account:",
+    `- ${created.accountName}`,
+    `- ${created.bankName}, ${created.accountNumber}`,
+    "Automatic collections start paying into it 6 hours after this change, so a wrong or unauthorised change can be caught first.",
+    "If you didn't expect this, a super admin should set the right account in Admin console → Collections straight away.",
+  ]);
   return created;
 }
 
@@ -142,7 +156,7 @@ export async function listOwed(input: { withBalances?: boolean | undefined } = {
     let vaBalance: string | null = null;
     let collectable: string | null = null;
     if (input.withBalances && parseMoneyToCents(r.owed) > 0n) {
-      const bal = await getVirtualAccountBalance(r.virtualAccountReference).catch(() => null);
+      const bal = await getVirtualAccountBalance(r.virtualAccountReference, LANE).catch(() => null);
       if (bal !== null) {
         vaBalance = bal.toFixed(2);
         const gross = minCents(parseMoneyToCents(r.owed), naira(bal));
@@ -195,7 +209,7 @@ export async function collectFromCustomer(userId: string, staff: Staff) {
     return { skipped: true as const, reason: `Owes ₦${row.owed}: too little to cover Moneta's ₦${centsToMoneyString(fee)} fee.` };
   }
 
-  const balance = await getVirtualAccountBalance(row.virtualAccountReference);
+  const balance = await getVirtualAccountBalance(row.virtualAccountReference, LANE);
   if (balance === null) throw new ValidationError("Couldn't read this customer's Moneta balance. Try again shortly.");
   const gross = minCents(owed, naira(balance));
   const sentCents = gross - fee;
@@ -233,6 +247,7 @@ export async function collectFromCustomer(userId: string, staff: Staff) {
     accountNumber: account.accountNumber,
     amount: Number(centsToMoneyString(sentCents)),
     narration: c.narration,
+    lane: LANE,
   }).catch((err) => ({ status: "failed" as const, providerReference: null, fee: null, message: (err as Error).message, raw: null }));
 
   const done = await applyOutcome(c, outcome.status, outcome.providerReference, outcome.fee, outcome.message);
@@ -259,18 +274,51 @@ async function applyOutcome(c: Collection, status: "success" | "failed" | "unkno
 }
 
 // Collects from everyone who owes enough. One customer at a time (each is a Moneta payout).
-export async function collectFromAll(staff: Staff) {
+// The automatic run passes `minOwedCents` (leave small debts for later, so the fee stays a
+// small share) and `maxTotalCents` (stop before collecting more than this in one run).
+export async function collectFromAll(staff: Staff, opts: { minOwedCents?: bigint; maxTotalCents?: bigint } = {}) {
   const fee = feeCents();
-  const due = (await owedRows()).filter((r) => parseMoneyToCents(r.owed) - fee >= MIN_SENT);
+  const floor = opts.minOwedCents !== undefined && opts.minOwedCents > fee + MIN_SENT ? opts.minOwedCents : fee + MIN_SENT;
+  const due = (await owedRows()).filter((r) => parseMoneyToCents(r.owed) >= floor);
   const results = [];
+  let total = 0n;
+  let stoppedAtLimit = false;
   for (const r of due) {
+    if (opts.maxTotalCents !== undefined && total + parseMoneyToCents(r.owed) > opts.maxTotalCents) {
+      stoppedAtLimit = true;
+      break;
+    }
     try {
-      results.push({ userId: r.userId, name: r.name, ...(await collectFromCustomer(r.userId, staff)) });
+      const res = await collectFromCustomer(r.userId, staff);
+      if (!res.skipped && res.collection.status !== "failed") total += parseMoneyToCents(res.collection.gross);
+      results.push({ userId: r.userId, name: r.name, ...res });
     } catch (err) {
       results.push({ userId: r.userId, name: r.name, skipped: true, reason: (err as Error).message });
     }
   }
-  return { attempted: due.length, results };
+  return { attempted: results.length, results, stoppedAtLimit };
+}
+
+// What customers still owe, split at `minOwedCents`.
+export async function owedSummary(minOwedCents: bigint) {
+  const rows = (await owedRows()).filter((r) => parseMoneyToCents(r.owed) > 0n);
+  const sum = (rs: OwedRow[]) => centsToMoneyString(rs.reduce((a, r) => a + parseMoneyToCents(r.owed), 0n));
+  const due = rows.filter((r) => parseMoneyToCents(r.owed) >= minOwedCents);
+  const small = rows.filter((r) => parseMoneyToCents(r.owed) < minOwedCents);
+  return { due: { customers: due.length, total: sum(due) }, small: { customers: small.length, total: sum(small) } };
+}
+
+// Re-checks collections Moneta hasn't confirmed yet (older than `olderThanMs`).
+export async function refreshOpenCollections(staff: Staff, olderThanMs = 15 * 60_000) {
+  const open = await db
+    .select({ id: collections.id })
+    .from(collections)
+    .where(and(sql`${collections.status} in ('processing', 'unknown')`, sql`${collections.createdAt} < ${new Date(Date.now() - olderThanMs).toISOString()}::timestamptz`));
+  const out = [];
+  for (const { id } of open) {
+    out.push(await refreshCollection(id, staff).catch((err) => ({ id, status: "unknown", lastError: (err as Error).message })));
+  }
+  return out;
 }
 
 export async function listCollections(limit: number) {
@@ -289,7 +337,7 @@ export async function refreshCollection(id: string, staff: Staff) {
   const [c] = await db.select().from(collections).where(eq(collections.id, id)).limit(1);
   if (!c) throw new NotFoundError("Collection not found");
   if (c.status !== "unknown" && c.status !== "processing") return toCollectionDto(c);
-  const hit = await findPayout({ narrationTag: c.narration.split(" ")[0]!, since: c.createdAt });
+  const hit = await findPayout({ narrationTag: c.narration.split(" ")[0]!, since: c.createdAt, lane: LANE });
   if (!hit || !hit.found || hit.status === "unknown") return toCollectionDto(c);
   const done = await applyOutcome(c, hit.status, hit.providerReference, null, hit.status === "failed" ? "Declined by the bank" : null);
   await audit(staff, "COLLECTION_CONFIRMED", "collection", c.id, { status: done.status });

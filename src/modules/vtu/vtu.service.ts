@@ -10,6 +10,7 @@ import { enforceSpendLimit } from "../compliance/service/limits.service.js";
 import { getOrCreateWallet, postEntry } from "../wallet/repository/wallet.repository.js";
 import { claimPromo, commitPromo, releasePromo, type PromoClaim } from "../promo/promo.service.js";
 import type { ProviderOutcome } from "./providers/types.js";
+import { watchPeyflexBalance } from "./peyflexWatch.js";
 
 export type VtuOrder = typeof vtuOrders.$inferSelect;
 export type Product = "airtime" | "data" | "cable" | "electricity";
@@ -180,6 +181,7 @@ export async function placeOrder(spec: OrderSpec, send: () => Promise<ProviderOu
 }
 
 async function recordOutcome(order: VtuOrder, outcome: ProviderOutcome): Promise<VtuOrder> {
+  watchPeyflexBalance(order.provider, outcome);
   const common = {
     providerReference: outcome.providerReference ?? order.providerReference,
     providerResponse: outcome.raw as any,

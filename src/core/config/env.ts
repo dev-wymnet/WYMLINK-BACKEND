@@ -65,6 +65,23 @@ const envSchema = z.object({
   // reports is what the ledger finally records.
   MONETA_PAYOUT_FEE: z.coerce.number().min(0).max(1000).default(30),
 
+  // Automatic collections (modules/admin/collections/autoCollect.ts): once a day, from this
+  // hour (Lagos time), collect from every customer who owes at least AUTO_COLLECT_MIN_OWED,
+  // up to AUTO_COLLECT_DAILY_MAX in total (naira). Nothing runs without a collection account.
+  AUTO_COLLECT_ENABLED: z
+    .union([z.literal("true"), z.literal("false")])
+    .default("true")
+    .transform((v) => v === "true"),
+  AUTO_COLLECT_HOUR: z.coerce.number().int().min(0).max(23).default(1),
+  AUTO_COLLECT_MIN_OWED: z.coerce.number().min(100).max(1_000_000).default(1000),
+  AUTO_COLLECT_DAILY_MAX: z.coerce.number().min(0).max(100_000_000).default(500_000),
+  // How often the backend checks whether the day's run is due (seconds).
+  AUTO_COLLECT_CHECK_SECONDS: z.coerce.number().int().min(5).max(3600).default(600),
+  // Email the team when Peyflex reports a balance below this (naira). 0 = never.
+  PEYFLEX_LOW_BALANCE: z.coerce.number().min(0).default(20_000),
+  // Who gets these emails (comma-separated). Empty: every active finance and super admin.
+  OPS_ALERT_EMAILS: z.string().default(""),
+
   PEYFLEX_BASE_URL: z.string().url().default("https://client.peyflex.com.ng"),
 
   PEYFLEX_API_TOKEN: z.string().default(""),

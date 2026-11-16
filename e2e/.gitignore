@@ -2,3 +2,4 @@ node_modules/
 pgdata-*/
 test.env
 *.png
+.autocollect-state.json

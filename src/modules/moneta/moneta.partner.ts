@@ -162,8 +162,8 @@ export async function createVirtualAccount(input: { firstName: string; surname: 
   };
 }
 
-export async function getVirtualAccountBalance(reference: string) {
-  const r = await call("GET", `/partner/virtual-accounts/account-balance?${new URLSearchParams({ virtual_account_reference: reference })}`);
+export async function getVirtualAccountBalance(reference: string, lane: MonetaLane = "main") {
+  const r = await call("GET", `/partner/virtual-accounts/account-balance?${new URLSearchParams({ virtual_account_reference: reference })}`, undefined, 90_000, lane);
   return ok(r) ? monetaAmount(r.json?.data?.balance) : null;
 }
 
@@ -274,6 +274,7 @@ export async function payout(input: {
   accountNumber: string;
   amount: number;
   narration: string;
+  lane?: MonetaLane;
 }): Promise<MoneyOutcome> {
   let r: MonetaResponse;
   try {
@@ -283,7 +284,7 @@ export async function payout(input: {
       amount: input.amount,
       narration: input.narration,
       source_virtual_accounts: [{ virtual_account_reference: input.sourceReference, amount: input.amount }],
-    }, 150_000);
+    }, 150_000, input.lane ?? "main");
   } catch (err) {
     if (err instanceof ServiceUnavailableError) throw err;
     return { status: "unknown", providerReference: null, fee: null, message: (err as Error).message, raw: null };
@@ -308,9 +309,9 @@ function classify(r: MonetaResponse): MoneyOutcome {
 }
 
 // Finds a payout by the Wymlink reference embedded in its narration.
-export async function findPayout(input: { narrationTag: string; since: Date }) {
+export async function findPayout(input: { narrationTag: string; since: Date; lane?: MonetaLane }) {
   const qs = new URLSearchParams({ fromDate: ymd(new Date(input.since.getTime() - 86_400_000)), toDate: ymd(new Date(Date.now() + 86_400_000)) });
-  const r = await call("GET", `/partner/virtual-accounts/payout-histories?${qs}`);
+  const r = await call("GET", `/partner/virtual-accounts/payout-histories?${qs}`, undefined, 90_000, input.lane ?? "main");
   if (!ok(r)) return null;
   const hit = list(r.json?.data).find((p) => String(p.narration ?? "").includes(input.narrationTag));
   if (!hit) return { found: false as const };

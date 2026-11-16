@@ -15,6 +15,7 @@ import {
   refreshCollection,
   setCollectionAccount,
 } from "./collections.service.js";
+import { autoCollectionStatus } from "./autoCollect.js";
 import { listBanks } from "../../moneta/moneta.partner.js";
 
 const wrap =
@@ -57,6 +58,9 @@ adminCollectionsRoutes.post(
     return { account: await setCollectionAccount({ ...body, staff: staffOf(req) }) };
   }),
 );
+
+// The automatic daily collection: its settings, the next run and what the last one did.
+adminCollectionsRoutes.get("/auto", ...view, wrap(async () => ({ auto: await autoCollectionStatus() })));
 
 // Who owes what. ?balances=true also reads each owing customer's live Moneta balance.
 adminCollectionsRoutes.get(

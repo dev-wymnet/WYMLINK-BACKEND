@@ -5,6 +5,7 @@ import { createServer } from "./server.js";
 import { checkPostgresConnection } from "./core/db/health.js";
 import { pool } from "./core/db/pool.js";
 import { migrateLatest } from "./core/db/migrate.js";
+import { startAutoCollection, stopAutoCollection } from "./modules/admin/collections/autoCollect.js";
 import { Server } from "http";
 
 async function bootstrap() {
@@ -27,6 +28,10 @@ async function bootstrap() {
   if (isWorker) {
     logger.info("worker_started");
   }
+
+  // Daily automatic collections. Started whatever the role, so it runs even when only an
+  // API process is deployed; each day's run is claimed once, so extra processes never repeat it.
+  startAutoCollection();
 
   if (isApi) {
     const app = createServer();
@@ -54,6 +59,7 @@ async function bootstrap() {
     if (retryTimer) {
       clearInterval(retryTimer);
     }
+    stopAutoCollection();
 
     await pool.end();
 

@@ -1,5 +1,6 @@
 // Local test stack: embedded Postgres (5433), fake Peyflex (4590), fake Moneta (4592) and a
-// helper (4591: POST /sql, POST /moneta/credit, GET /calls, POST /reset-calls, POST /moneta/mode).
+// helper (4591: POST /sql, POST /moneta/credit, GET /calls, POST /reset-calls, POST /moneta/mode,
+// GET /moneta/payouts, POST /moneta/payout-status, POST /peyflex/balance, POST|GET /mail).
 // No real provider is ever called.
 import http from "node:http";
 import { mkdtempSync } from "node:fs";
@@ -52,6 +53,7 @@ http.createServer(async (req, res) => {
     if (who.endsWith("0099") || who.endsWith("999999")) return send(res, 200, { status: "FAILED", message: "Declined by network" });
     if (who.endsWith("0098")) await sleep(1500);
     const amount = Number(b.amount ?? dataPlans.find((d) => d.plan_code === b.plan_code)?.amount ?? 0);
+    if (amount > peyBalance) return send(res, 200, { status: "FAILED", message: "Insufficient wallet balance" });
     peyBalance -= amount;
     return send(res, 200, { status: "SUCCESS", reference: `PFX${Date.now()}${Math.floor(Math.random() * 1e4)}`, message: "Delivered", balance: String(peyBalance), token: p.includes("electricity") ? "1234-5678-9012-3456-7890" : undefined });
   }
@@ -60,6 +62,8 @@ http.createServer(async (req, res) => {
 
 // ---------- Fake Moneta ----------
 const accounts = new Map(); // accountNumber -> {ref, name, balance, history: []}
+const payouts = []; // bank payouts out of VAs (collections)
+const mails = []; // emails sent through the fake mail relay (helper POST /mail)
 let monetaMode = { rejectDigitsInName: false, failCreate: false, createDelayMs: 0 };
 const byRef = (ref) => [...accounts.values()].find((a) => a.ref === ref);
 http.createServer(async (req, res) => {
@@ -87,6 +91,30 @@ http.createServer(async (req, res) => {
     const a = byRef(u.searchParams.get("virtual_account_reference"));
     return send(res, 200, { status: true, data: a ? a.history : [] });
   }
+  // Bank payouts (collections). Moneta takes ₦30 from the VA on top of the amount.
+  if (p === "/partner/virtual-accounts/banks") return send(res, 200, { status: true, data: [{ id: 101, bank_name: "Test Bank" }, { id: 102, bank_name: "Peyflex Funding Bank" }] });
+  if (p === "/partner/virtual-accounts/account/resolve") {
+    const n = u.searchParams.get("account_number") ?? "";
+    return n.endsWith("0000") ? send(res, 404, { status: false, message: "Account not found" }) : send(res, 200, { status: true, data: { account_name: "WYMNET TECHNOLOGIES LTD" } });
+  }
+  if (p === "/partner/virtual-accounts/payout") {
+    const src = b.source_virtual_accounts?.[0]?.virtual_account_reference;
+    const a = byRef(src);
+    const amount = Number(b.amount);
+    if (!a) return send(res, 400, { status: false, message: "Source account not found" });
+    if ((monetaMode.failPayoutFor ?? []).includes(a.number)) return send(res, 400, { status: false, message: "Payout declined by the bank" });
+    if ((monetaMode.unknownPayoutFor ?? []).includes(a.number)) {
+      a.balance -= amount + 30;
+      payouts.push({ reference: "PO" + Date.now(), narration: b.narration, amount, status: "pending" });
+      return send(res, 502, { status: false, message: "Gateway timeout" });
+    }
+    if (a.balance < amount + 30) return send(res, 400, { status: false, message: "Insufficient funds" });
+    a.balance -= amount + 30;
+    const po = { reference: "PO" + Date.now() + Math.floor(Math.random() * 1000), narration: b.narration, amount, status: "success", to: b.beneficiary_account_number };
+    payouts.push(po);
+    return send(res, 200, { status: true, message: "Payout successful", data: { status: "success", reference: po.reference, transaction_fees: 30 } });
+  }
+  if (p === "/partner/virtual-accounts/payout-histories") return send(res, 200, { status: true, data: payouts });
   if (p === "/partner/virtual-accounts/transfer") {
     const from = accounts.get(String(b.source_virtual_account));
     const to = accounts.get(String(b.destination_virtual_account));
@@ -108,6 +136,11 @@ http.createServer(async (req, res) => {
     if (u.pathname === "/calls") return send(res, 200, calls.filter((c) => !u.searchParams.get("since") || c.at >= Number(u.searchParams.get("since"))));
     if (u.pathname === "/reset-calls") { calls.length = 0; return send(res, 200, { ok: true }); }
     if (u.pathname === "/moneta/mode") { monetaMode = { ...monetaMode, ...b }; return send(res, 200, monetaMode); }
+    if (u.pathname === "/moneta/payouts") return send(res, 200, payouts);
+    if (u.pathname === "/moneta/payout-status") { const po = payouts.find((x) => x.narration?.includes(b.tag)); if (po) po.status = b.status; return send(res, 200, po ?? {}); }
+    if (u.pathname === "/peyflex/balance") { if (b.balance !== undefined) peyBalance = Number(b.balance); return send(res, 200, { balance: peyBalance }); }
+    // Fake Wymlink Mail relay: start the backend with MAIL_RELAY_URL=http://localhost:4591/mail.
+    if (u.pathname === "/mail") { if (req.method === "POST") mails.push({ at: Date.now(), auth: req.headers.authorization ?? null, ...b }); return send(res, 200, req.method === "POST" ? { ok: true } : mails); }
     if (u.pathname === "/moneta/accounts") return send(res, 200, [...accounts.values()].map(({ history, ...a }) => a));
     if (u.pathname === "/moneta/credit") {
       const a = accounts.get(String(b.accountNumber));
