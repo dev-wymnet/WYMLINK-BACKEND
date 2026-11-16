@@ -264,7 +264,13 @@ export type MoneyOutcome = {
   fee: number | null;
   message: string | null;
   raw: unknown;
+  http?: number; // Moneta's HTTP status, when it answered
 };
+
+// Moneta's whole answer to a payout that didn't succeed, for staff and the logs (customers
+// only ever see `message`). Capped, so a large error page can't flood a record.
+export const monetaReply = (o: MoneyOutcome) =>
+  o.raw === null || o.raw === undefined ? null : `Moneta HTTP ${o.http ?? "?"}: ${JSON.stringify(o.raw).slice(0, 700)}`;
 
 // One payout from one VA. Moneta takes its fee from the VA on top of `amount`.
 // Never retried: a timeout or 5xx is "unknown" and is settled from payout history.
@@ -289,7 +295,9 @@ export async function payout(input: {
     if (err instanceof ServiceUnavailableError) throw err;
     return { status: "unknown", providerReference: null, fee: null, message: (err as Error).message, raw: null };
   }
-  return classify(r);
+  const outcome = classify(r);
+  if (outcome.status !== "success") logger.warn({ reply: monetaReply(outcome) }, "moneta_payout_not_successful");
+  return outcome;
 }
 
 function classify(r: MonetaResponse): MoneyOutcome {
@@ -297,15 +305,16 @@ function classify(r: MonetaResponse): MoneyOutcome {
   const providerReference = d.reference ? String(d.reference) : null;
   const fee = monetaAmount(d.transaction_fees ?? d.transaction_fee);
   const state = String(d.status ?? "").toLowerCase();
+  const http = r.status;
   if (ok(r) && (state === "success" || state === "successful" || state === "")) {
-    return { status: "success", providerReference, fee, message: null, raw: r.json };
+    return { status: "success", providerReference, fee, message: null, raw: r.json, http };
   }
   // A clear refusal (4xx, or status false with a message) means nothing was sent.
   if ((r.status >= 400 && r.status < 500 && r.status !== 408 && r.status !== 429) || (r.json?.status === false && r.status < 500)) {
-    return { status: "failed", providerReference, fee: null, message: messageOf(r) ?? "Declined by the bank", raw: r.json };
+    return { status: "failed", providerReference, fee: null, message: messageOf(r) ?? "Declined by the bank", raw: r.json, http };
   }
-  if (state === "failed" || state === "reversed") return { status: "failed", providerReference, fee: null, message: messageOf(r), raw: r.json };
-  return { status: "unknown", providerReference, fee, message: messageOf(r) ?? "Awaiting confirmation", raw: r.json };
+  if (state === "failed" || state === "reversed") return { status: "failed", providerReference, fee: null, message: messageOf(r), raw: r.json, http };
+  return { status: "unknown", providerReference, fee, message: messageOf(r) ?? "Awaiting confirmation", raw: r.json, http };
 }
 
 // Finds a payout by the Wymlink reference embedded in its narration.

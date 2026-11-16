@@ -9,7 +9,7 @@ import { ValidationError } from "../../../core/errors/ValidationError.js";
 import { logger } from "../../../core/logger/logger.js";
 import { centsToMoneyString, parseMoneyToCents } from "../../../core/utils/money.js";
 import { insertAuditLog } from "../../audit/repository/audit.repository.js";
-import { findPayout, getVirtualAccountBalance, listBanks, payout, resolveAccount } from "../../moneta/moneta.partner.js";
+import { findPayout, getVirtualAccountBalance, listBanks, monetaReply, payout, resolveAccount } from "../../moneta/moneta.partner.js";
 import { emailTeam } from "../alerts/opsAlerts.js";
 
 // Every Moneta call here uses the background tunnel: customers' payments never queue
@@ -250,7 +250,9 @@ export async function collectFromCustomer(userId: string, staff: Staff) {
     lane: LANE,
   }).catch((err) => ({ status: "failed" as const, providerReference: null, fee: null, message: (err as Error).message, raw: null }));
 
-  const done = await applyOutcome(c, outcome.status, outcome.providerReference, outcome.fee, outcome.message);
+  // Staff see Moneta's whole answer when it isn't a success, not just its one-line message.
+  const reply = outcome.status === "success" ? null : monetaReply(outcome);
+  const done = await applyOutcome(c, outcome.status, outcome.providerReference, outcome.fee, [outcome.message, reply].filter(Boolean).join(" | ") || null);
   await audit(staff, "COLLECTION_RUN", "collection", c.id, { userId: row.userId, sent: done.sent, fee: done.fee, status: done.status });
   return { skipped: false as const, collection: toCollectionDto({ ...done, name: row.name, accountNumber: row.accountNumber }) };
 }
