@@ -14,6 +14,7 @@ import {
   adminSetTicketStatusHandler,
   createAccountUpdateRequestHandler,
   createSupportTicketHandler,
+  deleteMyAccountHandler,
   listAccountUpdateRequestsHandler,
   listSupportTicketsHandler,
   meHandler,
@@ -33,6 +34,9 @@ export const userRoutes = Router();
 
 userRoutes.get("/me", authGuard, meHandler);
 userRoutes.patch("/me", authGuard, updateProfileHandler);
+// Permanent account deletion (password required; refused while money is involved).
+const deleteLimiter = limiter({ windowMs: 15 * 60 * 1000, max: 5, by: "user" });
+userRoutes.post("/me/delete", authGuard, deleteLimiter, deleteMyAccountHandler);
 userRoutes.post(
   "/account-update-requests",
   authGuard,

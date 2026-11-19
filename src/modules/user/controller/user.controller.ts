@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { UnauthorizedError } from "../../../core/errors/UnauthorizedError.js";
 import { getMe, updateMyProfile } from "../service/user.service.js";
+import { deleteMyAccount } from "../service/accountDeletion.service.js";
 import { setUserReloadlyEnabled } from "../repository/user.repository.js";
 import {
   createAccountUpdateRequest,
@@ -30,6 +31,17 @@ export const meHandler: RequestHandler = async (req, res, next) => {
   try {
     if (!req.user) throw new UnauthorizedError();
     res.status(200).json({ user: await getMe(req.user.id) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Permanently deletes the signed-in customer's account (see accountDeletion.service.ts).
+export const deleteMyAccountHandler: RequestHandler = async (req, res, next) => {
+  try {
+    if (!req.user) throw new UnauthorizedError();
+    const { password } = z.object({ password: z.string().min(1).max(200) }).parse(req.body ?? {});
+    res.status(200).json(await deleteMyAccount({ userId: req.user.id, password, ip: req.ip, userAgent: req.get("user-agent") }));
   } catch (err) {
     next(err);
   }
